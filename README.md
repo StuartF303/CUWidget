@@ -23,6 +23,14 @@ The widget reads the OAuth token Claude Code stores, read-only. These are the ex
 
 The token is never written back or logged.
 
+## Using it
+
+- Drag the widget anywhere to move it; its position is remembered.
+- Tray icon (menu bar on macOS): hover for the 5-hour percent and reset time. Click it (Windows) to show or hide the widget. The menu has Show/Hide, Refresh now, Start at login and Quit.
+- Closing the window (Alt+F4 / Cmd+W) only hides it. Quit from the tray menu exits the app.
+- It starts at login only if you tick Start at login.
+- Launching it a second time just brings the existing widget to the front.
+
 ## Requirements
 
 Claude Code installed and signed in on the same machine.
