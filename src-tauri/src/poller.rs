@@ -225,15 +225,33 @@ fn empty_state(status: Status) -> WidgetState {
     WidgetState { status, five_hour: None, seven_day: None, rate_pct_per_hr: None, projection: Projection::Unknown }
 }
 
-/// Poll, emit, then sleep until the next poll or until `refresh` fires.
+const WAIT_TICK: Duration = Duration::from_secs(15);
+
+/// Wait until the wall-clock `deadline` or until `refresh` fires. Sleeps in
+/// short ticks and re-reads the wall clock each time, because the monotonic
+/// timer does not advance while the system is suspended: after wake the
+/// deadline is seen to have passed within one tick.
+async fn wait_until<C: Fn() -> DateTime<Utc>>(clock: C, deadline: DateTime<Utc>, tick: Duration, refresh: &Notify) {
+    loop {
+        let remaining = deadline - clock();
+        if remaining <= chrono::Duration::zero() {
+            return;
+        }
+        let step = remaining.to_std().map_or(tick, |r| r.min(tick));
+        tokio::select! {
+            _ = tokio::time::sleep(step) => {}
+            _ = refresh.notified() => return,
+        }
+    }
+}
+
+/// Poll, emit, then wait for the next poll or for `refresh` to fire.
 pub async fn run<F: Fn(WidgetState)>(mut poller: Poller, refresh: Arc<Notify>, emit: F) {
     loop {
         let (state, wait) = poller.poll_once(Utc::now()).await;
         emit(state);
-        tokio::select! {
-            _ = tokio::time::sleep(wait) => {}
-            _ = refresh.notified() => {}
-        }
+        let deadline = Utc::now() + chrono::Duration::from_std(wait).unwrap_or(chrono::Duration::seconds(MAX_BACKOFF_SECS as i64));
+        wait_until(Utc::now, deadline, WAIT_TICK, &refresh).await;
     }
 }
 
@@ -474,6 +492,53 @@ mod tests {
         // the 20-minute-old sample is now 35 minutes old and is dropped
         assert_eq!(load_samples(&file, now() + CD::minutes(15)).len(), 2);
         assert_eq!(std::fs::read_to_string(&file).unwrap().lines().count(), 2);
+    }
+
+    #[tokio::test]
+    async fn wait_returns_after_wall_clock_jump_despite_little_monotonic_time() {
+        use std::sync::atomic::{AtomicI64, Ordering};
+        let jump = AtomicI64::new(0);
+        let start = now();
+        let clock = || start + CD::seconds(jump.load(Ordering::SeqCst));
+        let refresh = Notify::new();
+        let deadline = start + CD::hours(1);
+        let tick = Duration::from_millis(5);
+
+        // No jump: still waiting.
+        let waiting = tokio::time::timeout(Duration::from_millis(60), wait_until(clock, deadline, tick, &refresh)).await;
+        assert!(waiting.is_err());
+
+        // Simulated suspend: wall clock jumps an hour while only milliseconds pass.
+        let began = std::time::Instant::now();
+        let (_, done) = tokio::join!(
+            async { tokio::time::sleep(Duration::from_millis(20)).await; jump.store(3600, Ordering::SeqCst); },
+            tokio::time::timeout(Duration::from_secs(2), wait_until(clock, deadline, tick, &refresh)),
+        );
+        assert!(done.is_ok());
+        assert!(began.elapsed() < Duration::from_secs(1));
+    }
+
+    #[tokio::test]
+    async fn wait_is_woken_early_by_refresh() {
+        let refresh = Notify::new();
+        refresh.notify_one();
+        let done = tokio::time::timeout(
+            Duration::from_secs(2),
+            wait_until(now, now() + CD::hours(1), Duration::from_secs(15), &refresh),
+        )
+        .await;
+        assert!(done.is_ok());
+    }
+
+    #[tokio::test]
+    async fn wait_returns_immediately_when_deadline_passed() {
+        let refresh = Notify::new();
+        let done = tokio::time::timeout(
+            Duration::from_secs(2),
+            wait_until(now, now() - CD::seconds(1), Duration::from_secs(15), &refresh),
+        )
+        .await;
+        assert!(done.is_ok());
     }
 
     #[test]
