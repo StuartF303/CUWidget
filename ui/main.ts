@@ -71,11 +71,18 @@ async function init(): Promise<void> {
   }
 
   try {
-    const initial = await invoke<WidgetState | null>("get_state");
-    if (initial) setState(initial);
     await listen<WidgetState>("usage-update", (event) => setState(event.payload));
   } catch {
     // Not running inside Tauri (e.g. a plain browser): stay in the loading state.
+    return;
+  }
+
+  try {
+    const initial = await invoke<WidgetState | null>("get_state");
+    // An event may have arrived while get_state was in flight; it is newer.
+    if (initial && state === null) setState(initial);
+  } catch {
+    // Live updates still arrive via the event subscription.
   }
 }
 

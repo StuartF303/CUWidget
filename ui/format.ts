@@ -41,8 +41,9 @@ export function barLevel(utilization: number | null): BarLevel {
 }
 
 export function formatCountdown(resetsAt: string | null, now: Date): string {
-  if (resetsAt === null) return "reset time unknown";
+  if (resetsAt == null) return "reset time unknown";
   const ms = new Date(resetsAt).getTime() - now.getTime();
+  if (Number.isNaN(ms)) return "reset time unknown";
   if (ms <= 0) return "resetting…";
   const minutes = Math.floor(ms / 60_000);
   if (minutes < 1) return "resets <1m";
@@ -53,8 +54,11 @@ export function formatCountdown(resetsAt: string | null, now: Date): string {
   return `resets ${minutes}m`;
 }
 
-function localHhmm(iso: string): string {
+/** Local 24-hour HH:MM, or null when the date is missing or invalid. */
+function localHhmm(iso: string | null | undefined): string | null {
+  if (iso == null) return null;
   const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return null;
   const pad = (n: number) => String(n).padStart(2, "0");
   return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
@@ -78,8 +82,10 @@ export function formatFooter(state: WidgetState | null): string {
     parts.push(`${rate >= 10 ? Math.round(rate) : rate.toFixed(1)} %/hr`);
   }
   const p = state.projection;
-  if (p.kind === "hits_limit_at") parts.push(`hits limit ~${localHhmm(p.at)}`);
-  else if (p.kind === "ok_until_reset") parts.push("OK until reset");
+  if (p.kind === "hits_limit_at") {
+    const at = localHhmm(p.at);
+    if (at !== null) parts.push(`hits limit ~${at}`);
+  } else if (p.kind === "ok_until_reset") parts.push("OK until reset");
   return parts.join(" · ");
 }
 
@@ -91,8 +97,10 @@ export function formatStatus(status: Status | null): {
   switch (status.kind) {
     case "live":
       return { kind: "live", text: "live" };
-    case "stale":
-      return { kind: "stale", text: `stale since ${localHhmm(status.since)}` };
+    case "stale": {
+      const since = localHhmm(status.since);
+      return { kind: "stale", text: since === null ? "stale" : `stale since ${since}` };
+    }
     case "signed_out":
       return { kind: "signed_out", text: "sign in to Claude Code" };
   }

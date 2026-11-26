@@ -162,3 +162,26 @@ describe("signed out and loading", () => {
     expect(formatFooter(null)).toBe("");
   });
 });
+
+describe("invalid dates", () => {
+  const bad = ["garbage", "", undefined as unknown as null];
+
+  it.each(bad)("countdown falls back to unknown reset time for %j", (v) => {
+    expect(formatCountdown(v, now)).toBe("reset time unknown");
+  });
+  it.each(bad)("footer omits an unusable projection time %j", (v) => {
+    const s: WidgetState = {
+      ...base,
+      rate_pct_per_hr: 12,
+      projection: { kind: "hits_limit_at", at: v as unknown as string },
+    };
+    expect(formatFooter(s)).toBe("12 %/hr");
+    expect(formatFooter({ ...s, rate_pct_per_hr: null })).toBe("");
+  });
+  it.each(bad)("stale status without a usable time reads just stale for %j", (v) => {
+    expect(formatStatus({ kind: "stale", since: v as unknown as string })).toEqual({
+      kind: "stale",
+      text: "stale",
+    });
+  });
+});
