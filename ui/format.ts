@@ -3,7 +3,7 @@ export type Status =
   | { kind: "stale"; since: string }
   | { kind: "signed_out" };
 
-export interface Window {
+export interface UsageWindow {
   utilization: number;
   resets_at: string | null;
 }
@@ -11,14 +11,17 @@ export interface Window {
 export type Projection =
   | { kind: "hits_limit_at"; at: string }
   | { kind: "ok_until_reset" }
+  | { kind: "limit_reached" }
   | { kind: "unknown" };
 
 export interface WidgetState {
   status: Status;
-  five_hour: Window | null;
-  seven_day: Window | null;
+  five_hour: UsageWindow | null;
+  seven_day: UsageWindow | null;
   rate_pct_per_hr: number | null;
   projection: Projection;
+  /** RFC 3339 time of the last poll attempt. */
+  fetched_at: string;
 }
 
 export type BarLevel = "normal" | "amber" | "red";
@@ -65,8 +68,8 @@ function localHhmm(iso: string | null | undefined): string | null {
 
 /** The windows to show: none while loading or signed out. */
 export function visibleWindows(state: WidgetState | null): {
-  five_hour: Window | null;
-  seven_day: Window | null;
+  five_hour: UsageWindow | null;
+  seven_day: UsageWindow | null;
 } {
   if (state === null || state.status.kind === "signed_out") {
     return { five_hour: null, seven_day: null };
@@ -78,11 +81,13 @@ export function formatFooter(state: WidgetState | null): string {
   if (state === null || state.status.kind === "signed_out") return "";
   const parts: string[] = [];
   const rate = state.rate_pct_per_hr;
-  if (rate !== null) {
+  const p = state.projection;
+  // At the limit a rate of zero says nothing useful.
+  if (rate !== null && !(p.kind === "limit_reached" && rate <= 0)) {
     parts.push(`${rate >= 10 ? Math.round(rate) : rate.toFixed(1)} %/hr`);
   }
-  const p = state.projection;
-  if (p.kind === "hits_limit_at") {
+  if (p.kind === "limit_reached") parts.push("limit reached");
+  else if (p.kind === "hits_limit_at") {
     const at = localHhmm(p.at);
     if (at !== null) parts.push(`hits limit ~${at}`);
   } else if (p.kind === "ok_until_reset") parts.push("OK until reset");
@@ -102,6 +107,23 @@ export function formatStatus(status: Status | null): {
       return { kind: "stale", text: since === null ? "stale" : `stale since ${since}` };
     }
     case "signed_out":
-      return { kind: "signed_out", text: "sign in to Claude Code" };
+      return { kind: "signed_out", text: "open Claude Code to sign in" };
   }
+}
+
+/** Without a poll attempt for this long a "live" status is no longer believable. */
+export const WATCHDOG_MS = 35 * 60_000;
+
+/**
+ * The status to display: a "live" state whose last poll attempt is more than
+ * 35 minutes old is shown as stale since that attempt (the poller has stopped
+ * emitting). A missing or unparsable `fetched_at` never trips the watchdog.
+ */
+export function effectiveStatus(state: WidgetState | null, now: Date): Status | null {
+  if (state === null) return null;
+  if (state.status.kind === "live") {
+    const age = now.getTime() - new Date(state.fetched_at).getTime();
+    if (age > WATCHDOG_MS) return { kind: "stale", since: state.fetched_at };
+  }
+  return state.status;
 }

@@ -3,12 +3,13 @@ import { listen } from "@tauri-apps/api/event";
 import {
   barLevel,
   barWidth,
+  effectiveStatus,
   formatCountdown,
   formatFooter,
   formatPercent,
   formatStatus,
   visibleWindows,
-  type Window,
+  type UsageWindow,
   type WidgetState,
 } from "./format";
 
@@ -18,6 +19,7 @@ const DEMO_STATE: WidgetState = {
   seven_day: { utilization: 23, resets_at: new Date(Date.now() + (4 * 24 + 6) * 3_600_000).toISOString() },
   rate_pct_per_hr: 12,
   projection: { kind: "hits_limit_at", at: new Date(Date.now() + 3 * 3_600_000).toISOString() },
+  fetched_at: new Date().toISOString(),
 };
 
 let state: WidgetState | null = null;
@@ -34,15 +36,19 @@ function renderCountdowns(): void {
   const now = new Date();
   const windows = visibleWindows(state);
   for (const key of rowKeys) {
-    const w: Window | null = windows[key];
+    const w: UsageWindow | null = windows[key];
     el(`#row-${key} .reset`).textContent = w ? formatCountdown(w.resets_at, now) : "";
   }
 }
 
-function render(): void {
-  const status = formatStatus(state ? state.status : null);
+function renderStatus(): void {
+  const status = formatStatus(effectiveStatus(state, new Date()));
   el("#status-dot").className = `dot ${status.kind}`;
   el("#status-text").textContent = status.text;
+}
+
+function render(): void {
+  renderStatus();
 
   const windows = visibleWindows(state);
   for (const key of rowKeys) {
@@ -63,7 +69,10 @@ function setState(next: WidgetState | null): void {
 
 async function init(): Promise<void> {
   render();
-  setInterval(renderCountdowns, 1000);
+  setInterval(() => {
+    renderCountdowns();
+    renderStatus();
+  }, 1000);
 
   if (new URLSearchParams(location.search).has("demo")) {
     setState(DEMO_STATE);

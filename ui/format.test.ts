@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   barLevel,
   barWidth,
+  effectiveStatus,
   formatCountdown,
   formatFooter,
   formatPercent,
@@ -90,6 +91,7 @@ const base: WidgetState = {
   seven_day: null,
   rate_pct_per_hr: null,
   projection: { kind: "unknown" },
+  fetched_at: "2026-01-22T08:00:00Z",
 };
 
 describe("formatFooter", () => {
@@ -119,6 +121,12 @@ describe("formatFooter", () => {
     expect(formatFooter({ ...base, projection: { kind: "ok_until_reset" } })).toBe("OK until reset");
     expect(formatFooter({ ...base, rate_pct_per_hr: 5 })).toBe("5.0 %/hr");
   });
+  it("shows limit reached, with the rate only when above zero", () => {
+    const limit = { kind: "limit_reached" } as const;
+    expect(formatFooter({ ...base, rate_pct_per_hr: 12, projection: limit })).toBe("12 %/hr · limit reached");
+    expect(formatFooter({ ...base, rate_pct_per_hr: 0, projection: limit })).toBe("limit reached");
+    expect(formatFooter({ ...base, rate_pct_per_hr: null, projection: limit })).toBe("limit reached");
+  });
   it("is empty when both are absent", () => {
     expect(formatFooter(base)).toBe("");
   });
@@ -140,7 +148,7 @@ describe("formatStatus", () => {
   it("signed out", () => {
     expect(formatStatus({ kind: "signed_out" })).toEqual({
       kind: "signed_out",
-      text: "sign in to Claude Code",
+      text: "open Claude Code to sign in",
     });
   });
 });
@@ -183,5 +191,32 @@ describe("invalid dates", () => {
       kind: "stale",
       text: "stale",
     });
+  });
+});
+
+describe("effectiveStatus watchdog", () => {
+  const fetched = "2026-01-22T08:00:00Z";
+  const at = (ms: number) => new Date(new Date(fetched).getTime() + ms);
+  const live: WidgetState = { ...base, status: { kind: "live" }, fetched_at: fetched };
+
+  it("is null before any state", () => {
+    expect(effectiveStatus(null, now)).toBeNull();
+  });
+  it("keeps live up to and including 35 minutes", () => {
+    expect(effectiveStatus(live, at(0))).toEqual({ kind: "live" });
+    expect(effectiveStatus(live, at(35 * MIN))).toEqual({ kind: "live" });
+  });
+  it("turns live into stale since fetched_at after 35 minutes", () => {
+    expect(effectiveStatus(live, at(35 * MIN + 1))).toEqual({ kind: "stale", since: fetched });
+    const s = effectiveStatus({ ...live, fetched_at: localIso(7, 5) }, new Date(2026, 0, 22, 8, 0));
+    expect(formatStatus(s)).toEqual({ kind: "stale", text: "stale since 07:05" });
+  });
+  it("leaves stale and signed out untouched", () => {
+    const stale = { kind: "stale", since: "2026-01-22T07:00:00Z" } as const;
+    expect(effectiveStatus({ ...live, status: stale }, at(3 * HOUR))).toEqual(stale);
+    expect(effectiveStatus({ ...live, status: { kind: "signed_out" } }, at(3 * HOUR))).toEqual({ kind: "signed_out" });
+  });
+  it("never trips on an unparsable fetched_at", () => {
+    expect(effectiveStatus({ ...live, fetched_at: "garbage" }, at(3 * HOUR))).toEqual({ kind: "live" });
   });
 });

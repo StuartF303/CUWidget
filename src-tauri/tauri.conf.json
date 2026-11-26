@@ -24,11 +24,12 @@
         "maximizable": false,
         "minimizable": false,
         "shadow": false,
-        "visible": true
+        "visible": true,
+        "visibleOnAllWorkspaces": true
       }
     ],
     "security": {
-      "csp": null
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self'; connect-src ipc: http://ipc.localhost"
     },
     "macOSPrivateApi": true
   },
@@ -36,9 +37,11 @@
     "active": true,
     "targets": [
       "msi",
-      "nsis",
       "dmg"
     ],
+    "macOS": {
+      "signingIdentity": "-"
+    },
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

@@ -2,7 +2,7 @@
 
 A small always-on-top desktop widget for Windows and macOS that shows Claude subscription usage: 5-hour and 7-day utilisation, live reset countdowns, run rate (%/hr) and a projected time of hitting the limit.
 
-Status: in development. See the [design](docs/superpowers/specs/2026-11-25-claude-usage-widget-design.md) and the [implementation plan](docs/superpowers/plans/2026-11-26-claude-usage-widget.md).
+Status: v0.1. Shows 5-hour and 7-day usage, reset countdowns, run rate and projected limit time on Windows and macOS. See the [design](docs/superpowers/specs/2026-11-25-claude-usage-widget-design.md) and the [implementation plan](docs/superpowers/plans/2026-11-26-claude-usage-widget.md).
 
 ## How it works
 
@@ -17,8 +17,9 @@ The usage endpoint is undocumented and may change without notice.
 The widget reads the OAuth token Claude Code stores, read-only. These are the expected Claude Code locations and field names; they are not yet confirmed on the owner's machines.
 
 - JSON shape: `{"claudeAiOauth": {"accessToken": "...", "expiresAt": <epoch milliseconds>}}`. A missing `expiresAt` is treated as not expired.
+- Expired or missing token: the widget shows "open Claude Code to sign in"; Claude Code refreshes the token itself, the widget never does.
 - Windows: the file `%USERPROFILE%\.claude\.credentials.json`.
-- macOS: the Keychain item `Claude Code-credentials`, read with `security find-generic-password -s "Claude Code-credentials" -w`.
+- macOS: the Keychain item `Claude Code-credentials`, read with `/usr/bin/security find-generic-password -s "Claude Code-credentials" -w`.
 - Other OS (Linux, local compile checks only): `$HOME/.claude/.credentials.json`.
 
 The token is never written back or logged.
@@ -30,6 +31,12 @@ The token is never written back or logged.
 - Closing the window (Alt+F4 / Cmd+W) only hides it. Quit from the tray menu exits the app.
 - It starts at login only if you tick Start at login.
 - Launching it a second time just brings the existing widget to the front.
+
+## First run
+
+- The installers are unsigned. Windows SmartScreen: More info, then Run anyway. macOS: right-click the app and choose Open, or run `xattr -cr "/Applications/Claude Usage.app"` if it is reported as damaged.
+- macOS may ask once for permission to read the Claude Code Keychain item; allow it.
+- A custom `CLAUDE_CONFIG_DIR` and Claude Code installs that live only inside WSL are not supported.
 
 ## Requirements
 
