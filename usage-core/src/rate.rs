@@ -12,15 +12,19 @@ pub struct Sample {
 pub enum Projection {
     HitsLimitAt { at: DateTime<Utc> },
     OkUntilReset,
+    LimitReached,
     Unknown,
 }
 
-const WINDOW_MINUTES: i64 = 30;
+/// Length of the run-rate window.
+pub const WINDOW_MINUTES: i64 = 30;
+/// Minimum span the usable samples must cover before a rate is reported.
+const MIN_SPAN_MINUTES: i64 = 5;
 
 /// Run rate in percentage points per hour over the last 30 minutes, using only
 /// samples after the most recent drop in utilisation (a drop means the usage
 /// window reset). Never negative; `None` with fewer than two usable samples or
-/// no elapsed time.
+/// when they span less than 5 minutes.
 pub fn run_rate(samples: &[Sample], now: DateTime<Utc>) -> Option<f64> {
     let cutoff = now - Duration::minutes(WINDOW_MINUTES);
     let mut recent: Vec<&Sample> = samples.iter().filter(|s| s.at >= cutoff && s.at <= now).collect();
@@ -34,7 +38,7 @@ pub fn run_rate(samples: &[Sample], now: DateTime<Utc>) -> Option<f64> {
     let (first, last) = (usable.first()?, usable.last()?);
 
     let elapsed_secs = (last.at - first.at).num_milliseconds() as f64 / 1000.0;
-    if usable.len() < 2 || elapsed_secs <= 0.0 {
+    if usable.len() < 2 || elapsed_secs < (MIN_SPAN_MINUTES * 60) as f64 {
         return None;
     }
     Some(((last.pct - first.pct) / (elapsed_secs / 3600.0)).max(0.0))
@@ -42,12 +46,12 @@ pub fn run_rate(samples: &[Sample], now: DateTime<Utc>) -> Option<f64> {
 
 /// Project when the limit will be hit at the current rate.
 pub fn project(pct: f64, rate: Option<f64>, now: DateTime<Utc>, resets_at: Option<DateTime<Utc>>) -> Projection {
+    if pct >= 100.0 {
+        return Projection::LimitReached;
+    }
     let Some(rate) = rate else {
         return Projection::Unknown;
     };
-    if pct >= 100.0 {
-        return Projection::HitsLimitAt { at: now };
-    }
     if rate <= 0.0 {
         return Projection::OkUntilReset;
     }
@@ -154,8 +158,21 @@ mod tests {
 
     #[test]
     fn project_already_at_limit() {
-        assert_eq!(project(100.0, Some(5.0), now(), None), Projection::HitsLimitAt { at: now() });
-        assert_eq!(project(104.5, Some(5.0), now(), None), Projection::HitsLimitAt { at: now() });
+        assert_eq!(project(100.0, Some(5.0), now(), None), Projection::LimitReached);
+        assert_eq!(project(104.5, Some(5.0), now(), None), Projection::LimitReached);
+        // Checked first, whatever the rate.
+        assert_eq!(project(100.0, Some(0.0), now(), None), Projection::LimitReached);
+        assert_eq!(project(100.0, Some(-1.0), now(), None), Projection::LimitReached);
+        assert_eq!(project(100.0, None, now(), None), Projection::LimitReached);
+        assert_eq!(project(99.9, None, now(), None), Projection::Unknown);
+    }
+
+    #[test]
+    fn rate_needs_five_minute_span() {
+        assert_eq!(run_rate(&[s(4, 40.0), s(0, 45.0)], now()), None);
+        assert_eq!(run_rate(&[s(5, 40.0), s(0, 41.0)], now()), Some(12.0));
+        // The span is measured after the latest reset.
+        assert_eq!(run_rate(&[s(20, 90.0), s(4, 2.0), s(0, 5.0)], now()), None);
     }
 
     #[test]
@@ -163,5 +180,6 @@ mod tests {
         let j = serde_json::to_string(&Projection::HitsLimitAt { at: now() }).unwrap();
         assert_eq!(j, r#"{"kind":"hits_limit_at","at":"2026-01-22T04:00:00Z"}"#);
         assert_eq!(serde_json::to_string(&Projection::OkUntilReset).unwrap(), r#"{"kind":"ok_until_reset"}"#);
+        assert_eq!(serde_json::to_string(&Projection::LimitReached).unwrap(), r#"{"kind":"limit_reached"}"#);
     }
 }

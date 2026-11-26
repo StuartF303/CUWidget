@@ -10,9 +10,12 @@ pub enum CredError {
     Expired,
 }
 
+const EPOCH_SECONDS_LIMIT: i64 = 100_000_000_000;
+
 /// Extract the access token from Claude Code's credentials JSON
 /// (`{"claudeAiOauth": {"accessToken": "...", "expiresAt": <epoch ms>}}`).
-/// A missing `expiresAt` is treated as not expired.
+/// A missing `expiresAt` is treated as not expired. An `expiresAt` below
+/// 100_000_000_000 is taken to be epoch seconds, otherwise epoch milliseconds.
 pub fn parse_credentials(json: &str, now: DateTime<Utc>) -> Result<String, CredError> {
     let value: serde_json::Value = serde_json::from_str(json).map_err(|_| CredError::Malformed)?;
     let oauth = value.get("claudeAiOauth").ok_or(CredError::Malformed)?;
@@ -22,7 +25,8 @@ pub fn parse_credentials(json: &str, now: DateTime<Utc>) -> Result<String, CredE
         .filter(|t| !t.is_empty())
         .ok_or(CredError::Malformed)?;
     if let Some(expires_at) = oauth.get("expiresAt").and_then(|e| e.as_i64()) {
-        if expires_at <= now.timestamp_millis() {
+        let expires_ms = if expires_at < EPOCH_SECONDS_LIMIT { expires_at.saturating_mul(1000) } else { expires_at };
+        if expires_ms <= now.timestamp_millis() {
             return Err(CredError::Expired);
         }
     }
@@ -45,17 +49,62 @@ pub fn read_access_token(now: DateTime<Utc>) -> Result<String, CredError> {
     read_from_file(&path, now)
 }
 
+/// Deadline for the Keychain read; the poller enforces a slightly longer one.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+const KEYCHAIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(8);
+
+/// Run `cmd` and return its stdout if it exits successfully within `timeout`.
+/// On expiry the child is killed and reaped, so none is left behind. Failure
+/// to start, a non-zero exit or a timeout are all `NotFound`.
+#[cfg_attr(not(any(target_os = "macos", test)), allow(dead_code))]
+fn run_with_deadline(mut cmd: std::process::Command, timeout: std::time::Duration) -> Result<Vec<u8>, CredError> {
+    use std::io::Read;
+    use std::process::Stdio;
+
+    let mut child = cmd
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|_| CredError::NotFound)?;
+    let mut stdout = child.stdout.take().ok_or(CredError::NotFound)?;
+    let reader = std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        let _ = stdout.read_to_end(&mut buf);
+        buf
+    });
+
+    let deadline = std::time::Instant::now() + timeout;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break Some(status),
+            Ok(None) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                break None;
+            }
+        }
+    };
+    match status {
+        // The reader ends when the pipe closes. After a kill it is detached
+        // instead of joined, in case a grandchild still holds the pipe open.
+        Some(s) if s.success() => reader.join().map_err(|_| CredError::NotFound),
+        _ => Err(CredError::NotFound),
+    }
+}
+
 /// Read Claude Code's access token from the macOS Keychain (read-only).
+/// Uses the absolute path of `security` and a deadline, so a locked keychain
+/// or a permission prompt cannot hang the caller.
 #[cfg(target_os = "macos")]
 pub fn read_access_token(now: DateTime<Utc>) -> Result<String, CredError> {
-    let out = std::process::Command::new("security")
-        .args(["find-generic-password", "-s", "Claude Code-credentials", "-w"])
-        .output()
-        .map_err(|_| CredError::NotFound)?;
-    if !out.status.success() {
-        return Err(CredError::NotFound);
-    }
-    let json = String::from_utf8(out.stdout).map_err(|_| CredError::Malformed)?;
+    let mut cmd = std::process::Command::new("/usr/bin/security");
+    cmd.args(["find-generic-password", "-s", "Claude Code-credentials", "-w"]);
+    let stdout = run_with_deadline(cmd, KEYCHAIN_TIMEOUT)?;
+    let json = String::from_utf8(stdout).map_err(|_| CredError::Malformed)?;
     parse_credentials(&json, now)
 }
 
@@ -101,6 +150,48 @@ mod tests {
         let exp = now().timestamp_millis() - 1;
         let j = format!(r#"{{"claudeAiOauth":{{"accessToken":"tok","expiresAt":{exp}}}}}"#);
         assert_eq!(parse_credentials(&j, now()), Err(CredError::Expired));
+    }
+
+    #[test]
+    fn expires_at_in_epoch_seconds() {
+        let future = now().timestamp() + 3600;
+        let j = format!(r#"{{"claudeAiOauth":{{"accessToken":"tok","expiresAt":{future}}}}}"#);
+        assert_eq!(parse_credentials(&j, now()), Ok("tok".to_string()));
+        let past = now().timestamp() - 1;
+        let j = format!(r#"{{"claudeAiOauth":{{"accessToken":"tok","expiresAt":{past}}}}}"#);
+        assert_eq!(parse_credentials(&j, now()), Err(CredError::Expired));
+    }
+
+    #[test]
+    fn expires_at_unit_boundary() {
+        // 99_999_999_999 is seconds (year 5138, in the future); 100_000_000_000 is
+        // milliseconds (1973, long past).
+        let j = r#"{"claudeAiOauth":{"accessToken":"tok","expiresAt":99999999999}}"#;
+        assert_eq!(parse_credentials(j, now()), Ok("tok".to_string()));
+        let j = r#"{"claudeAiOauth":{"accessToken":"tok","expiresAt":100000000000}}"#;
+        assert_eq!(parse_credentials(j, now()), Err(CredError::Expired));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn deadline_returns_output_of_fast_command() {
+        let mut cmd = std::process::Command::new("sh");
+        cmd.args(["-c", "printf hello"]);
+        assert_eq!(run_with_deadline(cmd, std::time::Duration::from_secs(5)), Ok(b"hello".to_vec()));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn deadline_kills_slow_command_and_failure_is_not_found() {
+        let mut cmd = std::process::Command::new("sh");
+        cmd.args(["-c", "sleep 30"]);
+        let started = std::time::Instant::now();
+        assert_eq!(run_with_deadline(cmd, std::time::Duration::from_millis(200)), Err(CredError::NotFound));
+        assert!(started.elapsed() < std::time::Duration::from_secs(5));
+
+        let mut cmd = std::process::Command::new("sh");
+        cmd.args(["-c", "exit 3"]);
+        assert_eq!(run_with_deadline(cmd, std::time::Duration::from_secs(5)), Err(CredError::NotFound));
     }
 
     #[test]

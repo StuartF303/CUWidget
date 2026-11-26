@@ -4,14 +4,15 @@ const SLOW_SECS: u64 = 600;
 const MEDIUM_SECS: u64 = 300;
 const FAST_SECS: u64 = 90;
 const BACKOFF_BASE_SECS: u64 = 60;
-const BACKOFF_MAX_SECS: u64 = 1800;
+/// Cap on the exponential failure backoff.
+pub const MAX_BACKOFF_SECS: u64 = 1800;
 
 /// How long to wait before the next poll. Failure backoff takes precedence,
 /// then "unchanged for two polls", then the utilisation tiers.
 pub fn next_interval(five_hour_pct: Option<f64>, unchanged_polls: u32, consecutive_failures: u32) -> Duration {
     if consecutive_failures >= 1 {
         let doublings = (consecutive_failures - 1).min(16);
-        let secs = (BACKOFF_BASE_SECS << doublings).min(BACKOFF_MAX_SECS);
+        let secs = (BACKOFF_BASE_SECS << doublings).min(MAX_BACKOFF_SECS);
         return Duration::from_secs(secs);
     }
     if unchanged_polls >= 2 {
