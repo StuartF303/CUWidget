@@ -12,6 +12,17 @@ Status: in development. See the [design](docs/superpowers/specs/2026-11-25-claud
 
 The usage endpoint is undocumented and may change without notice.
 
+## Where the token comes from
+
+The widget reads the OAuth token Claude Code stores, read-only. These are the expected Claude Code locations and field names; they are not yet confirmed on the owner's machines.
+
+- JSON shape: `{"claudeAiOauth": {"accessToken": "...", "expiresAt": <epoch milliseconds>}}`. A missing `expiresAt` is treated as not expired.
+- Windows: the file `%USERPROFILE%\.claude\.credentials.json`.
+- macOS: the Keychain item `Claude Code-credentials`, read with `security find-generic-password -s "Claude Code-credentials" -w`.
+- Other OS (Linux, local compile checks only): `$HOME/.claude/.credentials.json`.
+
+The token is never written back or logged.
+
 ## Requirements
 
 Claude Code installed and signed in on the same machine.
