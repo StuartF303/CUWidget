@@ -9,15 +9,19 @@ use chrono::{DateTime, Utc};
 use serde::Serialize;
 use tokio::sync::Notify;
 use usage_core::credentials::CredError;
-use usage_core::policy::next_interval;
-use usage_core::rate::{project, run_rate, Projection, Sample};
+use usage_core::policy::{next_interval, MAX_BACKOFF_SECS};
+use usage_core::rate::{project, run_rate, Projection, Sample, WINDOW_MINUTES};
 use usage_core::usage::{parse_usage, Window};
 
 pub const PRODUCTION_BASE: &str = "https://api.anthropic.com";
 const SIGNED_OUT_SECS: u64 = 600;
 const RESET_GRACE_SECS: i64 = 5;
-const MAX_BACKOFF_SECS: u64 = 1800;
-const SAMPLE_WINDOW_MINUTES: i64 = 30;
+/// Longest server-specified `Retry-After` that is honoured.
+const MAX_RETRY_AFTER_SECS: u64 = 21_600;
+/// Minimum gap between a request and the next manual refresh.
+const REFRESH_MIN_GAP_SECS: i64 = 30;
+/// Deadline for reading the token (a locked keychain can block).
+const TOKEN_READ_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -34,15 +38,18 @@ pub struct WidgetState {
     pub seven_day: Option<Window>,
     pub rate_pct_per_hr: Option<f64>,
     pub projection: Projection,
+    /// Time of the last poll attempt, whatever its outcome.
+    pub fetched_at: DateTime<Utc>,
 }
 
 /// Reads the access token fresh on every poll. Production: `read_access_token`.
-pub type TokenReader = Box<dyn Fn(DateTime<Utc>) -> Result<String, CredError> + Send + Sync>;
+pub type TokenReader = Arc<dyn Fn(DateTime<Utc>) -> Result<String, CredError> + Send + Sync + 'static>;
 
 pub struct Poller {
     base: String,
     client: reqwest::Client,
     read_token: TokenReader,
+    token_timeout: Duration,
     samples: Vec<Sample>,
     samples_path: Option<PathBuf>,
     last: WidgetState,
@@ -64,7 +71,7 @@ pub fn load_samples(path: &Path, now: DateTime<Utc>) -> Vec<Sample> {
     let Ok(text) = std::fs::read_to_string(path) else {
         return Vec::new();
     };
-    let cutoff = now - chrono::Duration::minutes(SAMPLE_WINDOW_MINUTES);
+    let cutoff = now - chrono::Duration::minutes(WINDOW_MINUTES);
     text.lines()
         .filter_map(|l| serde_json::from_str::<Sample>(l).ok())
         .filter(|s| s.at >= cutoff)
@@ -101,9 +108,10 @@ impl Poller {
             base: base.into().trim_end_matches('/').to_string(),
             client,
             read_token,
+            token_timeout: TOKEN_READ_TIMEOUT,
             samples,
             samples_path,
-            last: empty_state(Status::Live),
+            last: empty_state(Status::Live, now),
             last_five_pct: None,
             unchanged_polls: 0,
             consecutive_failures: 0,
@@ -111,13 +119,24 @@ impl Poller {
         }
     }
 
+    /// Read the token on a blocking thread with a deadline. A timeout (or a
+    /// panicking reader) counts as `NotFound`.
+    async fn read_token(&self, now: DateTime<Utc>) -> Result<String, CredError> {
+        let reader = self.read_token.clone();
+        let task = tokio::task::spawn_blocking(move || reader(now));
+        match tokio::time::timeout(self.token_timeout, task).await {
+            Ok(Ok(result)) => result,
+            _ => Err(CredError::NotFound),
+        }
+    }
+
     pub async fn poll_once(&mut self, now: DateTime<Utc>) -> (WidgetState, Duration) {
-        let token = match (self.read_token)(now) {
+        let token = match self.read_token(now).await {
             Ok(t) => t,
-            Err(_) => return self.signed_out(),
+            Err(_) => return self.signed_out(now),
         };
         match self.fetch(token).await {
-            Outcome::SignedOut => self.signed_out(),
+            Outcome::SignedOut => self.signed_out(now),
             Outcome::Body(text) => match parse_usage(&text, now) {
                 Ok(snap) => self.live(snap.five_hour, snap.seven_day, now),
                 Err(_) => self.failed(now, None),
@@ -161,10 +180,12 @@ impl Poller {
         }
     }
 
-    fn signed_out(&mut self) -> (WidgetState, Duration) {
-        self.last = empty_state(Status::SignedOut);
+    fn signed_out(&mut self, now: DateTime<Utc>) -> (WidgetState, Duration) {
+        self.last = empty_state(Status::SignedOut, now);
         self.last_five_pct = None;
         self.unchanged_polls = 0;
+        self.consecutive_failures = 0;
+        self.failing_since = None;
         (self.last.clone(), Duration::from_secs(SIGNED_OUT_SECS))
     }
 
@@ -182,7 +203,7 @@ impl Poller {
         if let Some(p) = pct {
             self.samples.push(Sample { at: now, pct: p });
         }
-        let cutoff = now - chrono::Duration::minutes(SAMPLE_WINDOW_MINUTES);
+        let cutoff = now - chrono::Duration::minutes(WINDOW_MINUTES);
         self.samples.retain(|s| s.at >= cutoff);
         if let Some(path) = &self.samples_path {
             save_samples(path, &self.samples);
@@ -203,7 +224,7 @@ impl Poller {
             }
         }
 
-        self.last = WidgetState { status: Status::Live, five_hour: five, seven_day: seven, rate_pct_per_hr: rate, projection };
+        self.last = WidgetState { status: Status::Live, five_hour: five, seven_day: seven, rate_pct_per_hr: rate, projection, fetched_at: now };
         (self.last.clone(), wait)
     }
 
@@ -212,26 +233,46 @@ impl Poller {
         let since = *self.failing_since.get_or_insert(now);
         let mut wait = next_interval(self.last_five_pct, self.unchanged_polls, self.consecutive_failures);
         if let Some(secs) = retry_after {
-            wait = wait.max(Duration::from_secs(secs)).min(Duration::from_secs(MAX_BACKOFF_SECS));
+            wait = wait.max(Duration::from_secs(secs.min(MAX_RETRY_AFTER_SECS)));
         }
         let mut state = self.last.clone();
         state.status = Status::Stale { since };
+        state.fetched_at = now;
         self.last = state.clone();
         (state, wait)
     }
 }
 
-fn empty_state(status: Status) -> WidgetState {
-    WidgetState { status, five_hour: None, seven_day: None, rate_pct_per_hr: None, projection: Projection::Unknown }
+fn empty_state(status: Status, fetched_at: DateTime<Utc>) -> WidgetState {
+    WidgetState { status, five_hour: None, seven_day: None, rate_pct_per_hr: None, projection: Projection::Unknown, fetched_at }
+}
+
+/// Earliest time a manual refresh may poll again: the full backoff or
+/// Retry-After deadline after a failed poll, otherwise 30 s after the request.
+fn refresh_not_before(state: &WidgetState, polled_at: DateTime<Utc>, deadline: DateTime<Utc>) -> DateTime<Utc> {
+    match state.status {
+        Status::Stale { .. } => deadline,
+        _ => polled_at + chrono::Duration::seconds(REFRESH_MIN_GAP_SECS),
+    }
 }
 
 const WAIT_TICK: Duration = Duration::from_secs(15);
 
-/// Wait until the wall-clock `deadline` or until `refresh` fires. Sleeps in
-/// short ticks and re-reads the wall clock each time, because the monotonic
-/// timer does not advance while the system is suspended: after wake the
-/// deadline is seen to have passed within one tick.
-async fn wait_until<C: Fn() -> DateTime<Utc>>(clock: C, deadline: DateTime<Utc>, tick: Duration, refresh: &Notify) {
+/// Wait until the wall-clock `deadline`, or until `refresh` fires. A refresh
+/// never returns before `not_before` (backoff / Retry-After / 30 s gap): it
+/// shortens the wait to `not_before` and is not dropped. Sleeps in short ticks
+/// and re-reads the wall clock each time, because the monotonic timer does not
+/// advance while the system is suspended: after wake the deadline is seen to
+/// have passed within one tick.
+async fn wait_until<C: Fn() -> DateTime<Utc>>(
+    clock: C,
+    deadline: DateTime<Utc>,
+    not_before: DateTime<Utc>,
+    tick: Duration,
+    refresh: &Notify,
+) {
+    let mut deadline = deadline;
+    let mut refreshed = false;
     loop {
         let remaining = deadline - clock();
         if remaining <= chrono::Duration::zero() {
@@ -240,7 +281,10 @@ async fn wait_until<C: Fn() -> DateTime<Utc>>(clock: C, deadline: DateTime<Utc>,
         let step = remaining.to_std().map_or(tick, |r| r.min(tick));
         tokio::select! {
             _ = tokio::time::sleep(step) => {}
-            _ = refresh.notified() => return,
+            _ = refresh.notified(), if !refreshed => {
+                refreshed = true;
+                deadline = deadline.min(not_before);
+            }
         }
     }
 }
@@ -248,10 +292,14 @@ async fn wait_until<C: Fn() -> DateTime<Utc>>(clock: C, deadline: DateTime<Utc>,
 /// Poll, emit, then wait for the next poll or for `refresh` to fire.
 pub async fn run<F: Fn(WidgetState)>(mut poller: Poller, refresh: Arc<Notify>, emit: F) {
     loop {
-        let (state, wait) = poller.poll_once(Utc::now()).await;
-        emit(state);
+        let polled_at = Utc::now();
+        let (state, wait) = poller.poll_once(polled_at).await;
         let deadline = Utc::now() + chrono::Duration::from_std(wait).unwrap_or(chrono::Duration::seconds(MAX_BACKOFF_SECS as i64));
-        wait_until(Utc::now, deadline, WAIT_TICK, &refresh).await;
+        let not_before = refresh_not_before(&state, polled_at, deadline);
+        emit(state);
+        // A refresh that arrived during the poll is already satisfied by it.
+        let _ = tokio::time::timeout(Duration::ZERO, refresh.notified()).await;
+        wait_until(Utc::now, deadline, not_before, WAIT_TICK, &refresh).await;
     }
 }
 
@@ -277,7 +325,7 @@ mod tests {
     }
 
     fn ok_token() -> TokenReader {
-        Box::new(|_| Ok("secret-token".to_string()))
+        Arc::new(|_| Ok("secret-token".to_string()))
     }
 
     fn poller(server: &MockServer) -> Poller {
@@ -377,7 +425,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn retry_after_extends_sleep_and_is_capped() {
+    async fn retry_after_extends_sleep_and_is_capped_at_six_hours() {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .respond_with(ResponseTemplate::new(429).insert_header("Retry-After", "300"))
@@ -389,7 +437,91 @@ mod tests {
         let (_, wait) = p.poll_once(now()).await;
         assert_eq!(wait, Duration::from_secs(300));
         let (_, wait) = p.poll_once(now()).await;
-        assert_eq!(wait, Duration::from_secs(1800));
+        assert_eq!(wait, Duration::from_secs(21_600));
+    }
+
+    #[tokio::test]
+    async fn backoff_itself_stays_capped_at_1800s() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET")).respond_with(ResponseTemplate::new(503)).mount(&server).await;
+        let mut p = poller(&server);
+        let mut last = Duration::ZERO;
+        for _ in 0..8 {
+            last = p.poll_once(now()).await.1;
+        }
+        assert_eq!(last, Duration::from_secs(1800));
+    }
+
+    #[tokio::test]
+    async fn signed_out_resets_failure_state() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET")).respond_with(ResponseTemplate::new(503)).up_to_n_times(2).mount(&server).await;
+        Mock::given(method("GET")).respond_with(ResponseTemplate::new(401)).up_to_n_times(1).mount(&server).await;
+        Mock::given(method("GET")).respond_with(ResponseTemplate::new(503)).mount(&server).await;
+        let mut p = poller(&server);
+        let (s1, w1) = p.poll_once(now()).await;
+        let (_, w2) = p.poll_once(now() + CD::seconds(60)).await;
+        assert_eq!(s1.status, Status::Stale { since: now() });
+        assert_eq!((w1.as_secs(), w2.as_secs()), (60, 120));
+
+        let t = now() + CD::minutes(10);
+        let (out, _) = p.poll_once(t).await;
+        assert_eq!(out.status, Status::SignedOut);
+        assert_eq!(p.consecutive_failures, 0);
+        assert_eq!(p.failing_since, None);
+
+        let t2 = now() + CD::minutes(20);
+        let (stale, wait) = p.poll_once(t2).await;
+        assert_eq!(stale.status, Status::Stale { since: t2 });
+        assert_eq!(wait, Duration::from_secs(60));
+    }
+
+    #[tokio::test]
+    async fn fetched_at_is_set_on_every_outcome() {
+        let server = MockServer::start().await;
+        mount_ok(&server, body(Some((20.0, now() + CD::hours(3))), 40.0)).await;
+        let mut p = poller(&server);
+        let t1 = now() + CD::seconds(1);
+        assert_eq!(p.poll_once(t1).await.0.fetched_at, t1);
+
+        server.reset().await;
+        Mock::given(method("GET")).respond_with(ResponseTemplate::new(503)).up_to_n_times(1).mount(&server).await;
+        Mock::given(method("GET")).respond_with(ResponseTemplate::new(401)).mount(&server).await;
+        let t2 = now() + CD::seconds(2);
+        let (stale, _) = p.poll_once(t2).await;
+        assert!(matches!(stale.status, Status::Stale { .. }));
+        assert_eq!(stale.fetched_at, t2);
+        let t3 = now() + CD::seconds(3);
+        let (out, _) = p.poll_once(t3).await;
+        assert_eq!(out.status, Status::SignedOut);
+        assert_eq!(out.fetched_at, t3);
+    }
+
+    #[tokio::test]
+    async fn blocking_token_reader_times_out_to_signed_out_and_loop_continues() {
+        let server = MockServer::start().await;
+        mount_ok(&server, body(Some((20.0, now() + CD::hours(3))), 40.0)).await;
+        let slow = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let flag = slow.clone();
+        let reader: TokenReader = Arc::new(move |_| {
+            if flag.load(std::sync::atomic::Ordering::SeqCst) {
+                std::thread::sleep(Duration::from_millis(1500));
+            }
+            Ok("secret-token".to_string())
+        });
+        let mut p = Poller::new(server.uri(), reader, None, now());
+        p.token_timeout = Duration::from_millis(50);
+        let began = std::time::Instant::now();
+        let (state, wait) = p.poll_once(now()).await;
+        assert_eq!(state.status, Status::SignedOut);
+        assert_eq!(wait, Duration::from_secs(600));
+        assert!(began.elapsed() < Duration::from_secs(1));
+        assert!(server.received_requests().await.unwrap().is_empty());
+
+        // The loop continues: the next poll with a responsive reader goes live.
+        slow.store(false, std::sync::atomic::Ordering::SeqCst);
+        let (state, _) = p.poll_once(now() + CD::minutes(10)).await;
+        assert_eq!(state.status, Status::Live);
     }
 
     #[tokio::test]
@@ -397,7 +529,7 @@ mod tests {
         for err in [CredError::NotFound, CredError::Expired] {
             let server = MockServer::start().await;
             let e = err.clone();
-            let mut p = Poller::new(server.uri(), Box::new(move |_| Err(e.clone())), None, now());
+            let mut p = Poller::new(server.uri(), Arc::new(move |_| Err(e.clone())), None, now());
             let (state, wait) = p.poll_once(now()).await;
             assert_eq!(state.status, Status::SignedOut);
             assert_eq!(wait, Duration::from_secs(600));
@@ -505,29 +637,77 @@ mod tests {
         let tick = Duration::from_millis(5);
 
         // No jump: still waiting.
-        let waiting = tokio::time::timeout(Duration::from_millis(60), wait_until(clock, deadline, tick, &refresh)).await;
+        let waiting = tokio::time::timeout(Duration::from_millis(60), wait_until(clock, deadline, deadline, tick, &refresh)).await;
         assert!(waiting.is_err());
 
         // Simulated suspend: wall clock jumps an hour while only milliseconds pass.
         let began = std::time::Instant::now();
         let (_, done) = tokio::join!(
             async { tokio::time::sleep(Duration::from_millis(20)).await; jump.store(3600, Ordering::SeqCst); },
-            tokio::time::timeout(Duration::from_secs(2), wait_until(clock, deadline, tick, &refresh)),
+            tokio::time::timeout(Duration::from_secs(2), wait_until(clock, deadline, deadline, tick, &refresh)),
         );
         assert!(done.is_ok());
         assert!(began.elapsed() < Duration::from_secs(1));
     }
 
     #[tokio::test]
-    async fn wait_is_woken_early_by_refresh() {
+    async fn refresh_after_not_before_returns_at_once() {
         let refresh = Notify::new();
         refresh.notify_one();
         let done = tokio::time::timeout(
             Duration::from_secs(2),
-            wait_until(now, now() + CD::hours(1), Duration::from_secs(15), &refresh),
+            wait_until(now, now() + CD::hours(1), now() - CD::seconds(1), Duration::from_secs(15), &refresh),
         )
         .await;
         assert!(done.is_ok());
+    }
+
+    #[tokio::test]
+    async fn refresh_before_not_before_waits_for_it_and_is_not_dropped() {
+        use std::sync::atomic::{AtomicI64, Ordering};
+        let jump = AtomicI64::new(0);
+        let start = now();
+        let clock = || start + CD::seconds(jump.load(Ordering::SeqCst));
+        let refresh = Notify::new();
+        refresh.notify_one();
+        let (deadline, not_before) = (start + CD::hours(1), start + CD::minutes(10));
+        let tick = Duration::from_millis(5);
+
+        // Inside the backoff: the refresh must not end the wait.
+        let waiting = tokio::time::timeout(Duration::from_millis(80), wait_until(clock, deadline, not_before, tick, &refresh)).await;
+        assert!(waiting.is_err());
+
+        // Once not_before has passed the wait ends, well before the deadline.
+        // The refresh was consumed by the first (cancelled) call, so notify again.
+        refresh.notify_one();
+        let (_, done) = tokio::join!(
+            async { tokio::time::sleep(Duration::from_millis(20)).await; jump.store(601, Ordering::SeqCst); },
+            tokio::time::timeout(Duration::from_secs(2), wait_until(clock, deadline, not_before, tick, &refresh)),
+        );
+        assert!(done.is_ok());
+    }
+
+    #[tokio::test]
+    async fn without_refresh_wait_runs_to_deadline_not_not_before() {
+        let refresh = Notify::new();
+        let waiting = tokio::time::timeout(
+            Duration::from_millis(60),
+            wait_until(now, now() + CD::hours(1), now() - CD::seconds(1), Duration::from_millis(5), &refresh),
+        )
+        .await;
+        assert!(waiting.is_err());
+    }
+
+    #[test]
+    fn not_before_is_backoff_deadline_after_failure_else_thirty_seconds() {
+        let polled = now();
+        let deadline = polled + CD::seconds(600);
+        let stale = empty_state(Status::Stale { since: polled }, polled);
+        assert_eq!(refresh_not_before(&stale, polled, deadline), deadline);
+        for status in [Status::Live, Status::SignedOut] {
+            let st = empty_state(status, polled);
+            assert_eq!(refresh_not_before(&st, polled, deadline), polled + CD::seconds(30));
+        }
     }
 
     #[tokio::test]
@@ -535,7 +715,7 @@ mod tests {
         let refresh = Notify::new();
         let done = tokio::time::timeout(
             Duration::from_secs(2),
-            wait_until(now, now() - CD::seconds(1), Duration::from_secs(15), &refresh),
+            wait_until(now, now() - CD::seconds(1), now() + CD::hours(1), Duration::from_secs(15), &refresh),
         )
         .await;
         assert!(done.is_ok());

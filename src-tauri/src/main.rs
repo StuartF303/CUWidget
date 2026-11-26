@@ -18,11 +18,6 @@ struct LatestState(Mutex<Option<WidgetState>>);
 struct Refresh(Arc<Notify>);
 
 #[tauri::command]
-fn refresh_now(refresh: State<'_, Refresh>) {
-    refresh.0.notify_one();
-}
-
-#[tauri::command]
 fn get_state(latest: State<'_, LatestState>) -> Option<WidgetState> {
     latest.0.lock().ok().and_then(|g| g.clone())
 }
@@ -45,7 +40,7 @@ fn main() {
         ))
         .manage(LatestState::default())
         .manage(Refresh(Arc::new(Notify::new())))
-        .invoke_handler(tauri::generate_handler![refresh_now, get_state])
+        .invoke_handler(tauri::generate_handler![get_state])
         // Closing the window hides it; the app exits only via the tray Quit item.
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
@@ -65,7 +60,7 @@ fn main() {
             });
             let poller = Poller::new(
                 PRODUCTION_BASE,
-                Box::new(usage_core::credentials::read_access_token),
+                Arc::new(usage_core::credentials::read_access_token),
                 samples_path,
                 Utc::now(),
             );

@@ -24,13 +24,13 @@ where
     Tz::Offset: std::fmt::Display,
 {
     if state.status == Status::SignedOut {
-        return "Claude usage: sign in to Claude Code".into();
+        return "Claude usage: open Claude Code to sign in".into();
     }
-    let Some(window) = state.five_hour.as_ref() else {
+    let Some(pct) = five_hour_percent(state) else {
         return "Claude usage: no data".into();
     };
-    let mut text = format!("5h {}%", window.utilization.round() as i64);
-    if let Some(at) = window.resets_at {
+    let mut text = format!("5h {pct}%");
+    if let Some(at) = state.five_hour.as_ref().and_then(|w| w.resets_at) {
         text.push_str(&format!(" · resets {}", at.with_timezone(tz).format("%H:%M")));
     }
     if matches!(state.status, Status::Stale { .. }) {
@@ -117,6 +117,10 @@ pub fn build(app: &AppHandle, refresh: impl Fn() + Send + Sync + 'static) -> tau
             _ => {}
         })
         .on_tray_icon_event(|tray, event| {
+            // On macOS a left click opens the menu instead.
+            if cfg!(target_os = "macos") {
+                return;
+            }
             if let TrayIconEvent::Click {
                 button: MouseButton::Left,
                 button_state: MouseButtonState::Up,
@@ -148,6 +152,7 @@ mod tests {
             seven_day: None,
             rate_pct_per_hr: None,
             projection: Projection::Unknown,
+            fetched_at: at(4, 0),
         }
     }
 
@@ -199,7 +204,7 @@ mod tests {
     #[test]
     fn signed_out_prompts_sign_in() {
         let s = state(Status::SignedOut, None);
-        assert_eq!(tooltip_text(&s, &Utc), "Claude usage: sign in to Claude Code");
+        assert_eq!(tooltip_text(&s, &Utc), "Claude usage: open Claude Code to sign in");
     }
 
     #[test]
