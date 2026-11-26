@@ -1,4 +1,119 @@
+:root {
+  --panel: #f6f6f7;
+  --text: #1d1d1f;
+  --muted: #6b6b70;
+  --track: #dcdce0;
+  --normal: #2f7d4f;
+  --amber: #a15c00;
+  --red: #c42b2b;
+  color-scheme: light dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --panel: #232326;
+    --text: #f0f0f2;
+    --muted: #9a9aa2;
+    --track: #3a3a40;
+    --normal: #5cc08a;
+    --amber: #f0b429;
+    --red: #ff6b6b;
+  }
+}
+
+html,
 body {
   margin: 0;
-  font-family: system-ui, sans-serif;
+  background: transparent;
+  overflow: hidden;
+  user-select: none;
+  -webkit-user-select: none;
+  cursor: default;
+}
+
+body {
+  font: 12px/1.3 system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+
+.panel {
+  box-sizing: border-box;
+  width: 100vw;
+  height: 100vh;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--panel);
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+}
+
+header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.title {
+  font-weight: 600;
+}
+
+.status {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--muted);
+}
+
+.dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+.dot.live { background: var(--normal); }
+.dot.stale { background: var(--amber); }
+.dot.signed_out { background: var(--red); }
+
+.row {
+  display: grid;
+  grid-template-columns: 18px 1fr 34px;
+  grid-template-rows: auto auto;
+  column-gap: 6px;
+  row-gap: 1px;
+  align-items: center;
+}
+
+.label { color: var(--muted); }
+.pct { text-align: right; }
+
+.track {
+  height: 6px;
+  border-radius: 3px;
+  background: var(--track);
+  overflow: hidden;
+}
+
+.fill {
+  display: block;
+  height: 100%;
+  width: 0;
+  border-radius: 3px;
+  background: var(--normal);
+  transition: width 0.3s ease;
+}
+.fill.amber { background: var(--amber); }
+.fill.red { background: var(--red); }
+
+.reset {
+  grid-column: 2 / 4;
+  color: var(--muted);
+  font-size: 11px;
+  min-height: 14px;
+}
+
+footer {
+  color: var(--muted);
+  min-height: 15px;
 }
