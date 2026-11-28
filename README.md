@@ -32,15 +32,15 @@ The token is never written back or logged.
   - **Start at login**: off by default; the same setting as the tray item.
   - **Reset position**: moves the widget to the top-right of the primary screen's work area, with a margin, and remembers it.
   - The app version is shown at the bottom.
-- Tray icon (menu bar on macOS): hover for the 5-hour percent and reset time. The menu has Show/Hide, Refresh now, Settings…, Always on top, Start at login, Reset position and Quit. The two check items stay in step with the settings panel.
-- Show/Hide, and a left click on the tray icon (Windows), bring the widget to the front if it is covered or minimised; they hide it only when it is visible and focused.
+- Tray icon (menu bar on macOS): hover for the 5-hour percent and reset time. The menu has Show, Hide, Refresh now, Settings…, Always on top, Start at login, Reset position and Quit. The two check items stay in step with the settings panel.
+- Show, and a left click on the tray icon (Windows), always bring the widget to the front, even if it is covered or minimised. They never hide it; use Hide in the tray menu for that.
 - Closing the window (Alt+F4 / Cmd+W) only hides it. Quit from the tray menu exits the app.
 - Settings are stored in `settings.json` in the app config folder. A missing or damaged file just gives the defaults.
 - Launching it a second time just brings the existing widget to the front.
 
 ### If the widget is lost
 
-- Choose **Reset position** in the tray menu. If it is hidden or buried under other windows, choose **Settings…** or **Show/Hide** first: they bring it to the front.
+- Choose **Reset position** in the tray menu. If it is hidden or buried under other windows, choose **Settings…** or **Show** first: they bring it to the front.
 - If the saved position is off every screen at launch (for example after unplugging a monitor), the widget moves itself back to the top-right automatically.
 
 ## First run

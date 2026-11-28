@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatVersion, parseSettingsView, WIDGET_WIDTH, windowHeight } from "./settings";
+import { formatVersion, logicalHeight, parseSettingsView, SETTINGS_HEIGHT, WIDGET_WIDTH, windowHeight } from "./settings";
 
 describe("parseSettingsView", () => {
   it("accepts a complete payload", () => {
@@ -45,11 +45,33 @@ describe("formatVersion", () => {
 });
 
 describe("windowHeight", () => {
-  it("is taller for the settings view than the usage view", () => {
-    expect(windowHeight("settings")).toBeGreaterThan(windowHeight("usage"));
+  it("uses the starting height for the usage view", () => {
+    expect(windowHeight("usage", 150)).toBe(150);
+    expect(windowHeight("usage", 143)).toBe(143);
+  });
+
+  it("uses the settings height for the settings view", () => {
+    expect(windowHeight("settings", 150)).toBe(SETTINGS_HEIGHT);
+  });
+
+  it("never shrinks below the starting height", () => {
+    expect(windowHeight("settings", 300)).toBe(300);
   });
 
   it("keeps the widget about 260 px wide", () => {
     expect(WIDGET_WIDTH).toBe(260);
+  });
+});
+
+describe("logicalHeight", () => {
+  it("divides by the scale factor", () => {
+    expect(logicalHeight(300, 2)).toBe(150);
+    expect(logicalHeight(188, 1.25)).toBe(150);
+  });
+
+  it("rejects unusable values", () => {
+    expect(logicalHeight(0, 1)).toBeNull();
+    expect(logicalHeight(150, 0)).toBeNull();
+    expect(logicalHeight(Number.NaN, 1)).toBeNull();
   });
 });

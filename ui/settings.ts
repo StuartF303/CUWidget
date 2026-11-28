@@ -9,14 +9,18 @@ export type ViewName = "usage" | "settings";
 
 export const WIDGET_WIDTH = 260;
 
-/** Logical window heights: keep in step with `height` in tauri.conf.json. */
-const HEIGHTS: Record<ViewName, number> = {
-  usage: 150,
-  settings: 172,
-};
+/** Logical height of the settings view. The usage-view height comes from tauri.conf.json. */
+export const SETTINGS_HEIGHT = 172;
 
-export function windowHeight(view: ViewName): number {
-  return HEIGHTS[view];
+/** Window height for a view; the usage height is whatever the window started at. */
+export function windowHeight(view: ViewName, usageHeight: number): number {
+  return view === "settings" ? Math.max(SETTINGS_HEIGHT, usageHeight) : usageHeight;
+}
+
+/** Logical height from a physical inner height and the scale factor; null if unusable. */
+export function logicalHeight(physicalHeight: number, scaleFactor: number): number | null {
+  if (!(physicalHeight > 0) || !(scaleFactor > 0)) return null;
+  return Math.round(physicalHeight / scaleFactor);
 }
 
 /** Validate an untrusted payload from the backend; null when it is not a settings view. */

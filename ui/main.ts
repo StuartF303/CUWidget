@@ -18,6 +18,7 @@ import {
   formatVersion,
   parseSettingsView,
   WIDGET_WIDTH,
+  logicalHeight,
   windowHeight,
   type SettingsView,
   type ViewName,
@@ -38,6 +39,8 @@ const params = new URLSearchParams(location.search);
 const demo = params.has("demo");
 
 let state: WidgetState | null = null;
+/** Logical height the window started at (from tauri.conf.json); restored on close. */
+let usageHeight: number | null = null;
 let view: ViewName = "usage";
 let demoSettings: SettingsView = { ...DEMO_SETTINGS };
 
@@ -111,9 +114,21 @@ async function applySettingsResult(result: SettingsView | null): Promise<void> {
   renderSettings(result ?? (await settingsCall("get_settings")));
 }
 
-async function resizeWindow(target: ViewName): Promise<void> {
+async function readUsageHeight(): Promise<void> {
   try {
-    await getCurrentWindow().setSize(new LogicalSize(WIDGET_WIDTH, windowHeight(target)));
+    const win = getCurrentWindow();
+    const size = await win.innerSize();
+    usageHeight = logicalHeight(size.height, await win.scaleFactor());
+  } catch {
+    // Not running inside Tauri.
+  }
+}
+
+async function resizeWindow(target: ViewName): Promise<void> {
+  if (usageHeight === null) await readUsageHeight();
+  if (usageHeight === null) return;
+  try {
+    await getCurrentWindow().setSize(new LogicalSize(WIDGET_WIDTH, windowHeight(target, usageHeight)));
   } catch {
     // Not running inside Tauri (e.g. a plain browser): nothing to resize.
   }
@@ -180,13 +195,19 @@ function bindSettings(): void {
 async function init(): Promise<void> {
   render();
   bindSettings();
+  void readUsageHeight();
   setInterval(() => {
     renderCountdowns();
     renderStatus();
   }, 1000);
 
   if (demo) {
-    setState(DEMO_STATE);
+    const demoStatus = params.get("state");
+    setState(
+      demoStatus === "signed_out"
+        ? { ...DEMO_STATE, status: { kind: "signed_out" }, five_hour: null, seven_day: null, rate_pct_per_hr: null, projection: { kind: "unknown" } }
+        : DEMO_STATE,
+    );
     renderSettings(demoSettings);
     if (params.get("view") === "settings") await setView("settings");
     return;

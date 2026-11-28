@@ -58,38 +58,14 @@ pub fn update(app: &AppHandle, state: &WidgetState) {
     }
 }
 
-/// What a Show/Hide request does to the widget.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum WindowAction {
-    Hide,
-    BringToFront,
-}
-
-/// The widget is not always on top by default, so a visible window may simply
-/// be covered. Only hide it when it is both visible and focused; otherwise
-/// bring it to the front.
-fn window_action(visible: bool, focused: bool) -> WindowAction {
-    if visible && focused {
-        WindowAction::Hide
-    } else {
-        WindowAction::BringToFront
+fn hide_main_window(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window(MAIN_WINDOW) {
+        let _ = window.hide();
     }
 }
 
-fn toggle_main_window(app: &AppHandle) {
-    let Some(window) = app.get_webview_window(MAIN_WINDOW) else {
-        return;
-    };
-    let visible = window.is_visible().unwrap_or(false);
-    let focused = window.is_focused().unwrap_or(false);
-    match window_action(visible, focused) {
-        WindowAction::Hide => {
-            let _ = window.hide();
-        }
-        WindowAction::BringToFront => show_main_window(app),
-    }
-}
-
+/// Show, unminimise and focus: brings a covered widget to the front. Never
+/// depends on the window's current focus.
 pub fn show_main_window(app: &AppHandle) {
     if let Some(window) = app.get_webview_window(MAIN_WINDOW) {
         let _ = window.show();
@@ -105,7 +81,8 @@ fn open_settings(app: &AppHandle) {
 
 /// Build the tray icon and its menu. `refresh` fires the poller's `Notify`.
 pub fn build(app: &AppHandle, refresh: impl Fn() + Send + Sync + 'static) -> tauri::Result<()> {
-    let show_hide = MenuItem::with_id(app, "show_hide", "Show/Hide", true, None::<&str>)?;
+    let show = MenuItem::with_id(app, "show", "Show", true, None::<&str>)?;
+    let hide = MenuItem::with_id(app, "hide", "Hide", true, None::<&str>)?;
     let refresh_item = MenuItem::with_id(app, "refresh", "Refresh now", true, None::<&str>)?;
     let settings_item = MenuItem::with_id(app, "settings", "Settings\u{2026}", true, None::<&str>)?;
     let view = controls::current(app);
@@ -117,7 +94,8 @@ pub fn build(app: &AppHandle, refresh: impl Fn() + Send + Sync + 'static) -> tau
     let menu = Menu::with_items(
         app,
         &[
-            &show_hide,
+            &show,
+            &hide,
             &refresh_item,
             &settings_item,
             &on_top,
@@ -144,7 +122,8 @@ pub fn build(app: &AppHandle, refresh: impl Fn() + Send + Sync + 'static) -> tau
         .menu(&menu)
         .show_menu_on_left_click(cfg!(target_os = "macos"))
         .on_menu_event(move |app, event| match event.id().as_ref() {
-            "show_hide" => toggle_main_window(app),
+            "show" => show_main_window(app),
+            "hide" => hide_main_window(app),
             "refresh" => refresh(),
             "settings" => open_settings(app),
             // The check item has already flipped itself; apply its new state.
@@ -174,7 +153,7 @@ pub fn build(app: &AppHandle, refresh: impl Fn() + Send + Sync + 'static) -> tau
                 ..
             } = event
             {
-                toggle_main_window(tray.app_handle());
+                show_main_window(tray.app_handle());
             }
         })
         .build(app)?;
@@ -252,18 +231,6 @@ mod tests {
     fn signed_out_prompts_sign_in() {
         let s = state(Status::SignedOut, None);
         assert_eq!(tooltip_text(&s, &Utc), "Claude usage: open Claude Code to sign in");
-    }
-
-    #[test]
-    fn hides_only_when_visible_and_focused() {
-        assert_eq!(window_action(true, true), WindowAction::Hide);
-    }
-
-    #[test]
-    fn covered_or_hidden_window_is_brought_to_front() {
-        assert_eq!(window_action(true, false), WindowAction::BringToFront);
-        assert_eq!(window_action(false, false), WindowAction::BringToFront);
-        assert_eq!(window_action(false, true), WindowAction::BringToFront);
     }
 
     #[test]
