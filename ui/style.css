@@ -6,6 +6,11 @@
   --normal: #2f7d4f;
   --amber: #a15c00;
   --red: #c42b2b;
+  --grip-bg: #e9e9ec;
+  --grip-dot: rgba(0, 0, 0, 0.22);
+  --btn: #e4e4e8;
+  --btn-hover: #d8d8de;
+  --focus: #1f6feb;
   color-scheme: light dark;
 }
 
@@ -18,6 +23,11 @@
     --normal: #5cc08a;
     --amber: #f0b429;
     --red: #ff6b6b;
+    --grip-bg: #2c2c30;
+    --grip-dot: rgba(255, 255, 255, 0.24);
+    --btn: #34343a;
+    --btn-hover: #404048;
+    --focus: #6ea8ff;
   }
 }
 
@@ -41,29 +51,107 @@ body {
   box-sizing: border-box;
   width: 100vw;
   height: 100vh;
-  padding: 10px 12px;
+  padding: 0 12px 10px;
   border-radius: 10px;
   background: var(--panel);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+[hidden] {
+  display: none !important;
+}
+
+/* The grip strip: the obvious place to drag. Its height matches the on-screen
+   guard in the backend (30 logical px). */
+.grip {
+  box-sizing: border-box;
+  flex: none;
+  height: 30px;
+  margin: 0 -12px;
+  padding: 0 8px 0 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background-color: var(--grip-bg);
+  background-image: radial-gradient(circle, var(--grip-dot) 1px, transparent 1.4px);
+  background-size: 6px 6px;
+  border-bottom: 1px solid var(--track);
+  cursor: grab;
+}
+.grip:active {
+  cursor: grabbing;
+}
+
+.view {
+  flex: 1;
+  min-height: 0;
+  padding-top: 8px;
   display: flex;
   flex-direction: column;
   justify-content: space-between;
 }
 
-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-}
-
 .title {
+  flex: none;
   font-weight: 600;
+  padding: 1px 5px;
+  margin-left: -5px;
+  border-radius: 4px;
+  background: var(--grip-bg);
 }
 
 .status {
+  flex: 1;
+  min-width: 0;
   display: flex;
   align-items: center;
+  justify-content: flex-end;
   gap: 5px;
   color: var(--muted);
+}
+.status > span:last-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: var(--grip-bg);
+}
+
+.icon-btn {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+.icon-btn:hover,
+.icon-btn[aria-expanded="true"] {
+  background: var(--btn-hover);
+  color: var(--text);
+}
+.icon-btn svg {
+  fill: none;
+  stroke: currentColor;
+}
+.gear-body { stroke-width: 1.6; }
+.gear-teeth { stroke-width: 2.4; stroke-dasharray: 2.4 2.4; }
+.gear-hole { stroke-width: 1.4; }
+
+.icon-btn:focus-visible,
+.btn:focus-visible,
+.opt input:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
 }
 
 .dot {
@@ -116,4 +204,56 @@ header {
 footer {
   color: var(--muted);
   min-height: 15px;
+}
+
+.options {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.opt {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+.opt input {
+  margin: 0;
+  accent-color: var(--normal);
+  cursor: pointer;
+}
+
+.btn {
+  font: inherit;
+  padding: 4px 10px;
+  border: 0;
+  border-radius: 6px;
+  background: var(--btn);
+  color: var(--text);
+  cursor: pointer;
+}
+.btn:hover {
+  background: var(--btn-hover);
+}
+.btn.primary {
+  background: var(--normal);
+  color: var(--panel);
+  font-weight: 600;
+}
+.btn.primary:hover {
+  filter: brightness(1.08);
+}
+#btn-reset-position {
+  align-self: flex-start;
+}
+
+.settings-foot {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.version {
+  color: var(--muted);
+  font-size: 10px;
 }
