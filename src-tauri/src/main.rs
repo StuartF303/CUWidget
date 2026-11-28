@@ -1,7 +1,10 @@
 // Prevents an extra console window on Windows in release.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod controls;
+mod placement;
 mod poller;
+mod settings;
 mod tray;
 
 use std::sync::{Arc, Mutex};
@@ -40,7 +43,20 @@ fn main() {
         ))
         .manage(LatestState::default())
         .manage(Refresh(Arc::new(Notify::new())))
-        .invoke_handler(tauri::generate_handler![get_state])
+        // A reload (F5) would restart the UI in the usage view: match the window.
+        .on_page_load(|webview, payload| {
+            if payload.event() == tauri::webview::PageLoadEvent::Started && webview.label() == controls::MAIN_WINDOW {
+                controls::reset_size(webview.app_handle());
+            }
+        })
+        .invoke_handler(tauri::generate_handler![
+            get_state,
+            controls::get_settings,
+            controls::set_always_on_top_cmd,
+            controls::set_autostart_cmd,
+            controls::reset_position_cmd,
+            controls::set_widget_height_cmd
+        ])
         // Closing the window hides it; the app exits only via the tray Quit item.
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
@@ -53,6 +69,16 @@ fn main() {
         .setup(|app| {
             #[cfg(target_os = "macos")]
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+
+            let settings_path = app
+                .path()
+                .app_config_dir()
+                .ok()
+                .map(|dir| settings::path_in(&dir));
+            app.manage(controls::SettingsState::load(settings_path));
+            // The window-state plugin has already restored the position.
+            controls::apply_stored(app.handle());
+            controls::ensure_on_screen(app.handle());
 
             let samples_path = app.path().app_data_dir().ok().and_then(|dir| {
                 std::fs::create_dir_all(&dir).ok()?;

@@ -8,26 +8,53 @@
   </head>
   <body>
     <main class="panel" data-tauri-drag-region>
-      <header data-tauri-drag-region>
+      <header class="grip" data-tauri-drag-region>
         <span class="title" data-tauri-drag-region>Claude usage</span>
         <span class="status" data-tauri-drag-region>
           <span id="status-dot" class="dot loading" data-tauri-drag-region></span>
           <span id="status-text" data-tauri-drag-region>loading…</span>
         </span>
+        <button
+          id="settings-toggle"
+          class="icon-btn"
+          type="button"
+          aria-label="Settings"
+          aria-controls="settings"
+          aria-expanded="false"
+        >
+          <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" focusable="false">
+            <circle class="gear-body" cx="8" cy="8" r="4.6" />
+            <circle class="gear-teeth" cx="8" cy="8" r="6.2" />
+            <circle class="gear-hole" cx="8" cy="8" r="1.7" />
+          </svg>
+        </button>
       </header>
-      <div class="row" id="row-five_hour" data-tauri-drag-region>
-        <span class="label" data-tauri-drag-region>5h</span>
-        <span class="track" data-tauri-drag-region><span class="fill normal" data-tauri-drag-region></span></span>
-        <span class="pct" data-tauri-drag-region>—</span>
-        <span class="reset" data-tauri-drag-region></span>
+      <div id="usage-view" class="view" data-tauri-drag-region>
+        <div class="row" id="row-five_hour" data-tauri-drag-region>
+          <span class="label" data-tauri-drag-region>5h</span>
+          <span class="track" data-tauri-drag-region><span class="fill normal" data-tauri-drag-region></span></span>
+          <span class="pct" data-tauri-drag-region>—</span>
+          <span class="reset" data-tauri-drag-region></span>
+        </div>
+        <div class="row" id="row-seven_day" data-tauri-drag-region>
+          <span class="label" data-tauri-drag-region>7d</span>
+          <span class="track" data-tauri-drag-region><span class="fill normal" data-tauri-drag-region></span></span>
+          <span class="pct" data-tauri-drag-region>—</span>
+          <span class="reset" data-tauri-drag-region></span>
+        </div>
+        <footer id="footer" data-tauri-drag-region></footer>
       </div>
-      <div class="row" id="row-seven_day" data-tauri-drag-region>
-        <span class="label" data-tauri-drag-region>7d</span>
-        <span class="track" data-tauri-drag-region><span class="fill normal" data-tauri-drag-region></span></span>
-        <span class="pct" data-tauri-drag-region>—</span>
-        <span class="reset" data-tauri-drag-region></span>
-      </div>
-      <footer id="footer" data-tauri-drag-region></footer>
+      <section id="settings" class="view" aria-label="Settings" hidden>
+        <div class="options">
+          <label class="opt"><input id="opt-always-on-top" type="checkbox" /><span>Always on top</span></label>
+          <label class="opt"><input id="opt-autostart" type="checkbox" /><span>Start at login</span></label>
+        </div>
+        <button id="btn-reset-position" class="btn" type="button">Reset position</button>
+        <div class="settings-foot">
+          <span id="version" class="version"></span>
+          <button id="btn-done" class="btn primary" type="button">Done</button>
+        </div>
+      </section>
     </main>
     <script type="module" src="./main.ts"></script>
   </body>
