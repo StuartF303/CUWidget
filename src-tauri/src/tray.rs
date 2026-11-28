@@ -3,9 +3,9 @@
 use chrono::{Local, TimeZone};
 use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri::{AppHandle, Manager};
-use tauri_plugin_autostart::ManagerExt as _;
+use tauri::{AppHandle, Emitter, Manager};
 
+use crate::controls::{self, TrayChecks, MAIN_WINDOW, OPEN_SETTINGS_EVENT};
 use crate::poller::{Status, WidgetState};
 
 const TRAY_ID: &str = "main";
@@ -58,35 +58,74 @@ pub fn update(app: &AppHandle, state: &WidgetState) {
     }
 }
 
+/// What a Show/Hide request does to the widget.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WindowAction {
+    Hide,
+    BringToFront,
+}
+
+/// The widget is not always on top by default, so a visible window may simply
+/// be covered. Only hide it when it is both visible and focused; otherwise
+/// bring it to the front.
+fn window_action(visible: bool, focused: bool) -> WindowAction {
+    if visible && focused {
+        WindowAction::Hide
+    } else {
+        WindowAction::BringToFront
+    }
+}
+
 fn toggle_main_window(app: &AppHandle) {
-    let Some(window) = app.get_webview_window("main") else {
+    let Some(window) = app.get_webview_window(MAIN_WINDOW) else {
         return;
     };
-    if window.is_visible().unwrap_or(false) {
-        let _ = window.hide();
-    } else {
-        show_main_window(app);
+    let visible = window.is_visible().unwrap_or(false);
+    let focused = window.is_focused().unwrap_or(false);
+    match window_action(visible, focused) {
+        WindowAction::Hide => {
+            let _ = window.hide();
+        }
+        WindowAction::BringToFront => show_main_window(app),
     }
 }
 
 pub fn show_main_window(app: &AppHandle) {
-    if let Some(window) = app.get_webview_window("main") {
+    if let Some(window) = app.get_webview_window(MAIN_WINDOW) {
         let _ = window.show();
+        let _ = window.unminimize();
         let _ = window.set_focus();
     }
+}
+
+fn open_settings(app: &AppHandle) {
+    show_main_window(app);
+    let _ = app.emit(OPEN_SETTINGS_EVENT, ());
 }
 
 /// Build the tray icon and its menu. `refresh` fires the poller's `Notify`.
 pub fn build(app: &AppHandle, refresh: impl Fn() + Send + Sync + 'static) -> tauri::Result<()> {
     let show_hide = MenuItem::with_id(app, "show_hide", "Show/Hide", true, None::<&str>)?;
     let refresh_item = MenuItem::with_id(app, "refresh", "Refresh now", true, None::<&str>)?;
-    let enabled = app.autolaunch().is_enabled().unwrap_or(false);
-    let autostart = CheckMenuItem::with_id(app, "autostart", "Start at login", true, enabled, None::<&str>)?;
+    let settings_item = MenuItem::with_id(app, "settings", "Settings\u{2026}", true, None::<&str>)?;
+    let view = controls::current(app);
+    let on_top = CheckMenuItem::with_id(app, "always_on_top", "Always on top", true, view.always_on_top, None::<&str>)?;
+    let autostart = CheckMenuItem::with_id(app, "autostart", "Start at login", true, view.autostart, None::<&str>)?;
+    let reset = MenuItem::with_id(app, "reset_position", "Reset position", true, None::<&str>)?;
     let separator = PredefinedMenuItem::separator(app)?;
     let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
     let menu = Menu::with_items(
         app,
-        &[&show_hide, &refresh_item, &autostart, &separator, &quit],
+        &[
+            &show_hide,
+            &refresh_item,
+            &settings_item,
+            &on_top,
+            &autostart,
+            &reset,
+            &separator,
+            &quit,
+        ],
     )?;
 
     let icon = app
@@ -94,7 +133,11 @@ pub fn build(app: &AppHandle, refresh: impl Fn() + Send + Sync + 'static) -> tau
         .cloned()
         .ok_or(tauri::Error::WindowNotFound)?;
 
-    let autostart_item = autostart.clone();
+    app.manage(TrayChecks {
+        always_on_top: on_top.clone(),
+        autostart: autostart.clone(),
+    });
+
     TrayIconBuilder::with_id(TRAY_ID)
         .icon(icon)
         .tooltip(TOOLTIP_INITIAL)
@@ -103,15 +146,19 @@ pub fn build(app: &AppHandle, refresh: impl Fn() + Send + Sync + 'static) -> tau
         .on_menu_event(move |app, event| match event.id().as_ref() {
             "show_hide" => toggle_main_window(app),
             "refresh" => refresh(),
+            "settings" => open_settings(app),
+            // The check item has already flipped itself; apply its new state.
+            // The controls re-sync both items to what was really accepted.
+            "always_on_top" => {
+                let want = on_top.is_checked().unwrap_or(false);
+                controls::set_always_on_top(app, want);
+            }
             "autostart" => {
-                // The check item has already flipped itself; mirror it into the
-                // OS setting and fall back to the real state on failure.
-                let manager = app.autolaunch();
-                let want = autostart_item.is_checked().unwrap_or(false);
-                let result = if want { manager.enable() } else { manager.disable() };
-                if result.is_err() {
-                    let _ = autostart_item.set_checked(manager.is_enabled().unwrap_or(!want));
-                }
+                let want = autostart.is_checked().unwrap_or(false);
+                controls::set_autostart(app, want);
+            }
+            "reset_position" => {
+                controls::reset_position(app);
             }
             "quit" => app.exit(0),
             _ => {}
@@ -205,6 +252,18 @@ mod tests {
     fn signed_out_prompts_sign_in() {
         let s = state(Status::SignedOut, None);
         assert_eq!(tooltip_text(&s, &Utc), "Claude usage: open Claude Code to sign in");
+    }
+
+    #[test]
+    fn hides_only_when_visible_and_focused() {
+        assert_eq!(window_action(true, true), WindowAction::Hide);
+    }
+
+    #[test]
+    fn covered_or_hidden_window_is_brought_to_front() {
+        assert_eq!(window_action(true, false), WindowAction::BringToFront);
+        assert_eq!(window_action(false, false), WindowAction::BringToFront);
+        assert_eq!(window_action(false, true), WindowAction::BringToFront);
     }
 
     #[test]
