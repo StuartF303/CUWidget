@@ -1,6 +1,6 @@
 # CUWidget
 
-A small always-on-top desktop widget for Windows and macOS that shows Claude subscription usage: 5-hour and 7-day utilisation, live reset countdowns, run rate (%/hr) and a projected time of hitting the limit.
+A small desktop widget for Windows and macOS that shows Claude subscription usage: 5-hour and 7-day utilisation, live reset countdowns, run rate (%/hr) and a projected time of hitting the limit.
 
 Status: v0.1. Shows 5-hour and 7-day usage, reset countdowns, run rate and projected limit time on Windows and macOS. See the [design](docs/superpowers/specs/2026-11-25-claude-usage-widget-design.md) and the [implementation plan](docs/superpowers/plans/2026-11-26-claude-usage-widget.md).
 
@@ -26,11 +26,22 @@ The token is never written back or logged.
 
 ## Using it
 
-- Drag the widget anywhere to move it; its position is remembered.
-- Tray icon (menu bar on macOS): hover for the 5-hour percent and reset time. Click it (Windows) to show or hide the widget. The menu has Show/Hide, Refresh now, Start at login and Quit.
+- Drag the widget by the dotted strip across the top (the grip with the title and status); the rest of the widget drags too. Its position is remembered.
+- The gear button in the grip opens the settings panel inside the widget (Escape or Done returns):
+  - **Always on top**: off by default. Tick it to keep the widget above other windows.
+  - **Start at login**: off by default; the same setting as the tray item.
+  - **Reset position**: moves the widget to the top-right of the primary screen's work area, with a margin, and remembers it.
+  - The app version is shown at the bottom.
+- Tray icon (menu bar on macOS): hover for the 5-hour percent and reset time. The menu has Show/Hide, Refresh now, Settings…, Always on top, Start at login, Reset position and Quit. The two check items stay in step with the settings panel.
+- Show/Hide, and a left click on the tray icon (Windows), bring the widget to the front if it is covered or minimised; they hide it only when it is visible and focused.
 - Closing the window (Alt+F4 / Cmd+W) only hides it. Quit from the tray menu exits the app.
-- It starts at login only if you tick Start at login.
+- Settings are stored in `settings.json` in the app config folder. A missing or damaged file just gives the defaults.
 - Launching it a second time just brings the existing widget to the front.
+
+### If the widget is lost
+
+- Choose **Reset position** in the tray menu. If it is hidden or buried under other windows, choose **Settings…** or **Show/Hide** first: they bring it to the front.
+- If the saved position is off every screen at launch (for example after unplugging a monitor), the widget moves itself back to the top-right automatically.
 
 ## First run
 
