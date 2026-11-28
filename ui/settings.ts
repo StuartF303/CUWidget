@@ -3,24 +3,23 @@ export interface SettingsView {
   always_on_top: boolean;
   autostart: boolean;
   version: string;
+  /** Configured logical window size (tauri.conf.json); the usage view's size. */
+  window_width: number;
+  window_height: number;
 }
 
 export type ViewName = "usage" | "settings";
 
-export const WIDGET_WIDTH = 260;
-
 /** Logical height of the settings view. The usage-view height comes from tauri.conf.json. */
 export const SETTINGS_HEIGHT = 172;
 
-/** Window height for a view; the usage height is whatever the window started at. */
+/** Window height for a view; the usage height is the configured one. */
 export function windowHeight(view: ViewName, usageHeight: number): number {
   return view === "settings" ? Math.max(SETTINGS_HEIGHT, usageHeight) : usageHeight;
 }
 
-/** Logical height from a physical inner height and the scale factor; null if unusable. */
-export function logicalHeight(physicalHeight: number, scaleFactor: number): number | null {
-  if (!(physicalHeight > 0) || !(scaleFactor > 0)) return null;
-  return Math.round(physicalHeight / scaleFactor);
+function isSize(n: unknown): n is number {
+  return typeof n === "number" && Number.isFinite(n) && n > 0;
 }
 
 /** Validate an untrusted payload from the backend; null when it is not a settings view. */
@@ -30,11 +29,19 @@ export function parseSettingsView(raw: unknown): SettingsView | null {
   if (
     typeof r.always_on_top !== "boolean" ||
     typeof r.autostart !== "boolean" ||
-    typeof r.version !== "string"
+    typeof r.version !== "string" ||
+    !isSize(r.window_width) ||
+    !isSize(r.window_height)
   ) {
     return null;
   }
-  return { always_on_top: r.always_on_top, autostart: r.autostart, version: r.version };
+  return {
+    always_on_top: r.always_on_top,
+    autostart: r.autostart,
+    version: r.version,
+    window_width: r.window_width,
+    window_height: r.window_height,
+  };
 }
 
 export function formatVersion(version: string): string {

@@ -138,6 +138,8 @@ pub fn build(app: &AppHandle, refresh: impl Fn() + Send + Sync + 'static) -> tau
             }
             "reset_position" => {
                 controls::reset_position(app);
+                // It is the recovery path: make sure the widget is visible.
+                show_main_window(app);
             }
             "quit" => app.exit(0),
             _ => {}

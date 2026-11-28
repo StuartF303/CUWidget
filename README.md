@@ -2,7 +2,7 @@
 
 A small desktop widget for Windows and macOS that shows Claude subscription usage: 5-hour and 7-day utilisation, live reset countdowns, run rate (%/hr) and a projected time of hitting the limit.
 
-Status: v0.1. Shows 5-hour and 7-day usage, reset countdowns, run rate and projected limit time on Windows and macOS. See the [design](docs/superpowers/specs/2026-11-25-claude-usage-widget-design.md) and the [implementation plan](docs/superpowers/plans/2026-11-26-claude-usage-widget.md).
+Status: v0.2. Shows 5-hour and 7-day usage, reset countdowns, run rate and projected limit time on Windows and macOS, with a drag handle and a settings panel. See the [design](docs/superpowers/specs/2026-11-25-claude-usage-widget-design.md) and the [implementation plan](docs/superpowers/plans/2026-11-26-claude-usage-widget.md).
 
 ## How it works
 
@@ -40,8 +40,8 @@ The token is never written back or logged.
 
 ### If the widget is lost
 
-- Choose **Reset position** in the tray menu. If it is hidden or buried under other windows, choose **Settings…** or **Show** first: they bring it to the front.
-- If the saved position is off every screen at launch (for example after unplugging a monitor), the widget moves itself back to the top-right automatically.
+- Choose **Reset position** in the tray menu (it also shows the widget). If it is hidden or buried under other windows, choose **Settings…** or **Show** first: they bring it to the front.
+- If the saved position is off every screen at launch (for example after unplugging a monitor), the widget is brought back onto a screen. Reset position then puts it at the top-right.
 
 ## First run
 

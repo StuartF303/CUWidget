@@ -1,7 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { LogicalSize } from "@tauri-apps/api/dpi";
 import { listen } from "@tauri-apps/api/event";
-import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   barLevel,
   barWidth,
@@ -17,8 +15,6 @@ import {
 import {
   formatVersion,
   parseSettingsView,
-  WIDGET_WIDTH,
-  logicalHeight,
   windowHeight,
   type SettingsView,
   type ViewName,
@@ -33,14 +29,15 @@ const DEMO_STATE: WidgetState = {
   fetched_at: new Date().toISOString(),
 };
 
-const DEMO_SETTINGS: SettingsView = { always_on_top: false, autostart: false, version: "0.2.0" };
+const DEMO_SETTINGS: SettingsView = { always_on_top: false, autostart: false, version: "0.2.0", window_width: 260, window_height: 150 };
 
 const params = new URLSearchParams(location.search);
 const demo = params.has("demo");
 
 let state: WidgetState | null = null;
-/** Logical height the window started at (from tauri.conf.json); restored on close. */
+/** Usage-view height from the backend (tauri.conf.json); the single source. */
 let usageHeight: number | null = null;
+let transitioning = false;
 let view: ViewName = "usage";
 let demoSettings: SettingsView = { ...DEMO_SETTINGS };
 
@@ -104,6 +101,7 @@ async function settingsCall(command: string, args?: Record<string, unknown>): Pr
 
 function renderSettings(settings: SettingsView | null): void {
   if (!settings) return;
+  usageHeight = settings.window_height;
   el<HTMLInputElement>("#opt-always-on-top").checked = settings.always_on_top;
   el<HTMLInputElement>("#opt-autostart").checked = settings.autostart;
   el("#version").textContent = formatVersion(settings.version);
@@ -114,43 +112,41 @@ async function applySettingsResult(result: SettingsView | null): Promise<void> {
   renderSettings(result ?? (await settingsCall("get_settings")));
 }
 
-async function readUsageHeight(): Promise<void> {
-  try {
-    const win = getCurrentWindow();
-    const size = await win.innerSize();
-    usageHeight = logicalHeight(size.height, await win.scaleFactor());
-  } catch {
-    // Not running inside Tauri.
-  }
-}
-
 async function resizeWindow(target: ViewName): Promise<void> {
-  if (usageHeight === null) await readUsageHeight();
+  if (demo) return;
+  if (usageHeight === null) await applySettingsResult(await settingsCall("get_settings"));
   if (usageHeight === null) return;
   try {
-    await getCurrentWindow().setSize(new LogicalSize(WIDGET_WIDTH, windowHeight(target, usageHeight)));
+    // Rust resizes and keeps the top-left corner fixed.
+    await invoke("set_widget_height_cmd", { height: windowHeight(target, usageHeight) });
   } catch {
-    // Not running inside Tauri (e.g. a plain browser): nothing to resize.
+    // Not running inside Tauri: nothing to resize.
   }
 }
 
 async function setView(next: ViewName): Promise<void> {
-  if (next === view) return;
-  view = next;
-  const open = next === "settings";
-  el("#settings-toggle").setAttribute("aria-expanded", String(open));
-  if (open) {
-    // Grow first so the panel never shows clipped, then swap the content.
-    await resizeWindow(next);
-    el("#usage-view").hidden = true;
-    el("#settings").hidden = false;
-    await applySettingsResult(await settingsCall("get_settings"));
-    el("#btn-done").focus();
-  } else {
-    el("#settings").hidden = true;
-    el("#usage-view").hidden = false;
-    await resizeWindow(next);
-    el("#settings-toggle").focus();
+  // Ignore input (double click, Escape) while a transition is in flight.
+  if (next === view || transitioning) return;
+  transitioning = true;
+  try {
+    const open = next === "settings";
+    if (open) {
+      // Grow first so the panel never shows clipped, then swap the content.
+      await resizeWindow(next);
+      el("#usage-view").hidden = true;
+      el("#settings").hidden = false;
+      await applySettingsResult(await settingsCall("get_settings"));
+      el("#btn-done").focus();
+    } else {
+      el("#settings").hidden = true;
+      el("#usage-view").hidden = false;
+      await resizeWindow(next);
+      el("#settings-toggle").focus();
+    }
+    view = next;
+    el("#settings-toggle").setAttribute("aria-expanded", String(open));
+  } finally {
+    transitioning = false;
   }
 }
 
@@ -195,7 +191,7 @@ function bindSettings(): void {
 async function init(): Promise<void> {
   render();
   bindSettings();
-  void readUsageHeight();
+  void applySettingsResult(null);
   setInterval(() => {
     renderCountdowns();
     renderStatus();

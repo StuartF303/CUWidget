@@ -57,6 +57,37 @@ pub fn default_position(work_area: Rect, window_w: u32, margin: u32) -> (i32, i3
     (x as i32, work_area.y.saturating_add(margin as i32))
 }
 
+/// Where "Reset position" puts the widget, in the target monitor's own pixel
+/// space.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ResetTarget {
+    /// Top-left in physical pixels (the target monitor's scale).
+    pub physical: (i32, i32),
+    /// The same point in logical units (physical / monitor scale).
+    pub logical: (f64, f64),
+}
+
+/// Compute the reset position for a monitor whose work area is `work_area`
+/// (physical pixels at `monitor_scale`). The window is `window_w` physical
+/// pixels wide at `window_scale` (the scale of the monitor it is on now), so its
+/// logical width is converted to the target monitor before placing it.
+pub fn reset_target(
+    work_area: Rect,
+    monitor_scale: f64,
+    window_w: u32,
+    window_scale: f64,
+    margin_logical: f64,
+) -> ResetTarget {
+    let logical_w = window_w as f64 / window_scale;
+    let target_w = (logical_w * monitor_scale).round() as u32;
+    let margin = (margin_logical * monitor_scale).round() as u32;
+    let (x, y) = default_position(work_area, target_w, margin);
+    ResetTarget {
+        physical: (x, y),
+        logical: (x as f64 / monitor_scale, y as f64 / monitor_scale),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -205,5 +236,55 @@ mod tests {
         let wa = Rect::new(-1920, 25, 1920, 1055);
         let (x, y) = default_position(wa, WIN_W, 16);
         assert!(grip_reachable(Rect::new(x, y, WIN_W, WIN_H), &[wa], GRIP_H, MIN_W));
+    }
+
+    #[test]
+    fn reset_target_same_scale() {
+        let t = reset_target(primary(), 1.0, 260, 1.0, 16.0);
+        assert_eq!(t.physical, (1920 - 260 - 16, 16));
+        assert_eq!(t.logical, (1644.0, 16.0));
+    }
+
+    #[test]
+    fn reset_target_window_on_1x_monitor_primary_is_2x() {
+        // Window is 260 px wide at 1x; primary is 2x (3840x2160 physical).
+        let wa = Rect::new(0, 0, 3840, 2080);
+        let t = reset_target(wa, 2.0, 260, 1.0, 16.0);
+        // Target width 520, margin 32.
+        assert_eq!(t.physical, (3840 - 520 - 32, 32));
+        assert_eq!(t.logical, ((3840.0 - 552.0) / 2.0, 16.0));
+    }
+
+    #[test]
+    fn reset_target_window_on_2x_monitor_primary_is_1x() {
+        // Window is 520 px wide at 2x; primary is 1x.
+        let t = reset_target(primary(), 1.0, 520, 2.0, 16.0);
+        assert_eq!(t.physical, (1920 - 260 - 16, 16));
+        assert_eq!(t.logical, (1644.0, 16.0));
+    }
+
+    #[test]
+    fn reset_target_fractional_primary_scale() {
+        // 1.5x primary 2880x1620, window 260 px wide at 1x: 390 px, margin 24.
+        let wa = Rect::new(0, 0, 2880, 1560);
+        let t = reset_target(wa, 1.5, 260, 1.0, 16.0);
+        assert_eq!(t.physical, (2880 - 390 - 24, 24));
+        assert_eq!(t.logical, ((2880.0 - 414.0) / 1.5, 16.0));
+    }
+
+    #[test]
+    fn reset_target_primary_with_non_zero_origin() {
+        // Primary is not at 0,0 (e.g. arranged right of another screen), 2x.
+        let wa = Rect::new(-3840, 50, 3840, 2100);
+        let t = reset_target(wa, 2.0, 520, 2.0, 16.0);
+        assert_eq!(t.physical, (-3840 + 3840 - 520 - 32, 50 + 32));
+        assert_eq!(t.logical, (-276.0, 41.0));
+    }
+
+    #[test]
+    fn reset_target_keeps_grip_reachable_on_target() {
+        let wa = Rect::new(0, 0, 3840, 2080);
+        let t = reset_target(wa, 2.0, 260, 1.0, 16.0);
+        assert!(grip_reachable(Rect::new(t.physical.0, t.physical.1, 520, 300), &[wa], 60, 120));
     }
 }

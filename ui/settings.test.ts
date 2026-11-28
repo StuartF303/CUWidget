@@ -1,20 +1,24 @@
 import { describe, expect, it } from "vitest";
-import { formatVersion, logicalHeight, parseSettingsView, SETTINGS_HEIGHT, WIDGET_WIDTH, windowHeight } from "./settings";
+import { formatVersion, parseSettingsView, SETTINGS_HEIGHT, windowHeight } from "./settings";
 
 describe("parseSettingsView", () => {
   it("accepts a complete payload", () => {
-    expect(parseSettingsView({ always_on_top: true, autostart: false, version: "0.2.0" })).toEqual({
+    expect(parseSettingsView({ always_on_top: true, autostart: false, version: "0.2.0", window_width: 260, window_height: 150 })).toEqual({
       always_on_top: true,
       autostart: false,
       version: "0.2.0",
+      window_width: 260,
+      window_height: 150,
     });
   });
 
   it("ignores unknown fields", () => {
-    expect(parseSettingsView({ always_on_top: false, autostart: true, version: "1", extra: 1 })).toEqual({
+    expect(parseSettingsView({ always_on_top: false, autostart: true, version: "1", window_width: 260, window_height: 150, extra: 1 })).toEqual({
       always_on_top: false,
       autostart: true,
       version: "1",
+      window_width: 260,
+      window_height: 150,
     });
   });
 
@@ -26,6 +30,11 @@ describe("parseSettingsView", () => {
     expect(parseSettingsView({ always_on_top: 1, autostart: false, version: "1" })).toBeNull();
     expect(parseSettingsView({ always_on_top: true, autostart: "no", version: "1" })).toBeNull();
     expect(parseSettingsView({ always_on_top: true, autostart: false })).toBeNull();
+    const ok = { always_on_top: true, autostart: false, version: "1" };
+    expect(parseSettingsView(ok)).toBeNull();
+    expect(parseSettingsView({ ...ok, window_width: 260, window_height: 0 })).toBeNull();
+    expect(parseSettingsView({ ...ok, window_width: "260", window_height: 150 })).toBeNull();
+    expect(parseSettingsView({ ...ok, window_width: 260, window_height: Number.NaN })).toBeNull();
   });
 });
 
@@ -56,22 +65,5 @@ describe("windowHeight", () => {
 
   it("never shrinks below the starting height", () => {
     expect(windowHeight("settings", 300)).toBe(300);
-  });
-
-  it("keeps the widget about 260 px wide", () => {
-    expect(WIDGET_WIDTH).toBe(260);
-  });
-});
-
-describe("logicalHeight", () => {
-  it("divides by the scale factor", () => {
-    expect(logicalHeight(300, 2)).toBe(150);
-    expect(logicalHeight(188, 1.25)).toBe(150);
-  });
-
-  it("rejects unusable values", () => {
-    expect(logicalHeight(0, 1)).toBeNull();
-    expect(logicalHeight(150, 0)).toBeNull();
-    expect(logicalHeight(Number.NaN, 1)).toBeNull();
   });
 });

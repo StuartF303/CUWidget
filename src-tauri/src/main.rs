@@ -43,12 +43,19 @@ fn main() {
         ))
         .manage(LatestState::default())
         .manage(Refresh(Arc::new(Notify::new())))
+        // A reload (F5) would restart the UI in the usage view: match the window.
+        .on_page_load(|webview, payload| {
+            if payload.event() == tauri::webview::PageLoadEvent::Started && webview.label() == controls::MAIN_WINDOW {
+                controls::reset_size(webview.app_handle());
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             get_state,
             controls::get_settings,
             controls::set_always_on_top_cmd,
             controls::set_autostart_cmd,
-            controls::reset_position_cmd
+            controls::reset_position_cmd,
+            controls::set_widget_height_cmd
         ])
         // Closing the window hides it; the app exits only via the tray Quit item.
         .on_window_event(|window, event| {
